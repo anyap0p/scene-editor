@@ -1,0 +1,77 @@
+:root {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  color: #e8e8e8;
+  background: #121212;
+  --panel: #1c1c1c;
+  --border: #333;
+  --accent: #5b8def;
+  --accent-dim: #3d5f9e;
+  --track: #2a2a2a;
+  --clip: #4a6fa5;
+  --clip-selected: #6b92e8;
+  --danger: #c44;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: #2a2a2a;
+  color: inherit;
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+
+button:hover {
+  background: #363636;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent-dim);
+  color: #fff;
+}
+
+button.primary:hover {
+  background: var(--accent-dim);
+}
+
+button.danger {
+  background: #3a2020;
+  border-color: #633;
+  color: #faa;
+}
+
+input[type='number'],
+input[type='text'],
+textarea,
+select {
+  background: #252525;
+  border: 1px solid var(--border);
+  color: inherit;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+input[type='file'] {
+  display: none;
+}
