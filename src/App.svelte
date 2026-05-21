@@ -35,6 +35,7 @@
     assignElementsToGroup,
   } from './lib/groups';
   import { PREVIEW_CHANNEL, openPreviewPopout } from './lib/previewSync';
+  import { centerElementsEach, centerElementsAsGroup } from './lib/align';
 
   let project = $state(defaultProject());
   let activeProjectId = $state(null);
@@ -362,6 +363,36 @@
     setSelection(elementIds);
   }
 
+  function getAlignTargetIds() {
+    if (timelineSelection.length > 0) return timelineSelection;
+    if (selectedId) return [selectedId];
+    return [];
+  }
+
+  function applyPositionPatches(patches) {
+    for (const [id, pos] of patches) {
+      updateElement(id, pos);
+    }
+  }
+
+  function centerSelectionEach() {
+    const ids = getAlignTargetIds();
+    if (ids.length === 0) return;
+    const els = project.elements.filter((e) => ids.includes(e.id));
+    applyPositionPatches(
+      centerElementsEach(els, project.canvasWidth, project.canvasHeight),
+    );
+  }
+
+  function centerSelectionAsGroup() {
+    const ids = getAlignTargetIds();
+    if (ids.length === 0) return;
+    const els = project.elements.filter((e) => ids.includes(e.id));
+    applyPositionPatches(
+      centerElementsAsGroup(els, project.canvasWidth, project.canvasHeight),
+    );
+  }
+
   function maxZIndex() {
     return project.elements.reduce((m, e) => Math.max(m, e.zIndex), 0);
   }
@@ -647,6 +678,25 @@
             Pop out preview
           </button>
         {/if}
+        {#if timelineSelection.length > 0 || selectedId}
+          <span class="preview-toolbar-divider"></span>
+          <button
+            type="button"
+            onclick={centerSelectionEach}
+            title="Center selected element(s) on canvas"
+          >
+            Center
+          </button>
+          {#if timelineSelection.length > 1}
+            <button
+              type="button"
+              onclick={centerSelectionAsGroup}
+              title="Center selection as a group"
+            >
+              Center group
+            </button>
+          {/if}
+        {/if}
       </div>
       {#if !previewPopoutOpen}
         <div class="preview-canvas">
@@ -669,8 +719,11 @@
     </main>
     <PropertiesPanel
       element={selectedElement}
+      selectionCount={timelineSelection.length || (selectedId ? 1 : 0)}
       onUpdate={updateElement}
       onDelete={deleteElement}
+      onCenterEach={centerSelectionEach}
+      onCenterGroup={centerSelectionAsGroup}
     />
   </div>
 
@@ -768,6 +821,13 @@
   .preview-hint {
     font-size: 12px;
     color: #888;
+  }
+
+  .preview-toolbar-divider {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    margin: 0 4px;
   }
 
   .preview-canvas {

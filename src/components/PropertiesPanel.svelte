@@ -1,14 +1,52 @@
 <script>
   /** @type {{
     element: import('../lib/types').SceneElement | null,
+    selectionCount: number,
     onUpdate: (id: string, patch: Partial<import('../lib/types').SceneElement>) => void,
     onDelete: (id: string) => void,
+    onCenterEach: () => void,
+    onCenterGroup: () => void,
   }} */
-  let { element, onUpdate, onDelete } = $props();
+  let {
+    element,
+    selectionCount,
+    onUpdate,
+    onDelete,
+    onCenterEach,
+    onCenterGroup,
+  } = $props();
+
+  let showGroupCenter = $derived(selectionCount > 1);
 </script>
 
 <aside class="props">
   <h2>Properties</h2>
+  {#if element || selectionCount > 0}
+    <div class="align-section">
+      <span class="section-label">Align</span>
+      <div class="align-buttons">
+        <button
+          type="button"
+          onclick={onCenterEach}
+          title={selectionCount > 1
+            ? 'Center each selected element on the canvas'
+            : 'Center this element on the canvas'}
+        >
+          {selectionCount > 1 ? 'Center each' : 'Center on canvas'}
+        </button>
+        {#if showGroupCenter}
+          <button
+            type="button"
+            onclick={onCenterGroup}
+            title="Center the selection as a group (keeps relative positions)"
+          >
+            Center group
+          </button>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
   {#if element}
     <label>
       Label
@@ -81,6 +119,8 @@
     <button type="button" class="danger" onclick={() => onDelete(element.id)}>
       Delete element
     </button>
+  {:else if selectionCount > 0}
+    <p class="hint">{selectionCount} elements selected. Use align buttons above.</p>
   {:else}
     <p class="hint">Select an element on the canvas or timeline.</p>
   {/if}
@@ -102,6 +142,33 @@
   h2 {
     margin: 0 0 4px;
     font-size: 14px;
+  }
+
+  .align-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .align-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .align-buttons button {
+    width: 100%;
+    font-size: 12px;
   }
 
   label {
