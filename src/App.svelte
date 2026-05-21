@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import Canvas from './components/Canvas.svelte';
   import Timeline from './components/Timeline.svelte';
   import PropertiesPanel from './components/PropertiesPanel.svelte';
@@ -33,6 +33,7 @@
     toggleGroupCollapsed,
     renameGroup,
   } from './lib/groups';
+  import { PREVIEW_CHANNEL, openPreviewPopout } from './lib/previewSync';
 
   let project = $state(defaultProject());
   let activeProjectId = $state(null);
@@ -63,6 +64,12 @@
   /** @type {import('./lib/types').SceneElement[]} */
   let clipboardElements = [];
   let pasteCount = 0;
+  let previewPopoutOpen = $state(false);
+  /** @type {Window | null} */
+  let previewPopoutWin = null;
+  /** @type {BroadcastChannel | null} */
+  let previewChannel = null;
+  let popoutWatchId = 0;
 
   async function refreshProjectList() {
     projectList = await listProjectMetas();
@@ -144,7 +151,79 @@
     await loadProjectById(nextId);
   }
 
+  function postPreviewSync() {
+    if (!previewChannel || !previewPopoutOpen) return;
+    previewChannel.postMessage({
+      type: 'sync',
+      elements: cloneProject(project).elements,
+      currentTime,
+      selectedId,
+      canvasWidth: project.canvasWidth,
+      canvasHeight: project.canvasHeight,
+      isPlaying,
+    });
+  }
+
+  function handlePreviewMessage(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    switch (msg.type) {
+      case 'ready':
+        postPreviewSync();
+        break;
+      case 'select':
+        selectFromCanvas(msg.id);
+        postPreviewSync();
+        break;
+      case 'update':
+        updateElement(msg.id, msg.patch);
+        break;
+      case 'seek':
+        seek(msg.time);
+        break;
+      case 'play':
+        if (msg.playing !== isPlaying) togglePlay();
+        break;
+    }
+  }
+
+  function watchPopoutClosed() {
+    clearInterval(popoutWatchId);
+    popoutWatchId = setInterval(() => {
+      if (previewPopoutWin?.closed) {
+        previewPopoutOpen = false;
+        previewPopoutWin = null;
+        clearInterval(popoutWatchId);
+      }
+    }, 400);
+  }
+
+  function popOutPreview() {
+    if (previewPopoutWin && !previewPopoutWin.closed) {
+      previewPopoutWin.focus();
+      return;
+    }
+    const win = openPreviewPopout();
+    if (!win) {
+      alert('Pop-up blocked. Allow pop-ups for this site to use the preview window.');
+      return;
+    }
+    previewPopoutWin = win;
+    previewPopoutOpen = true;
+    watchPopoutClosed();
+    postPreviewSync();
+  }
+
+  function dockPreview() {
+    previewPopoutWin?.close();
+    previewPopoutOpen = false;
+    previewPopoutWin = null;
+    clearInterval(popoutWatchId);
+  }
+
   onMount(async () => {
+    previewChannel = new BroadcastChannel(PREVIEW_CHANNEL);
+    previewChannel.onmessage = (e) => handlePreviewMessage(e.data);
+
     try {
       const id = await ensureProjects();
       await refreshProjectList();
@@ -156,6 +235,23 @@
       dbReady = true;
       skipAutosave = false;
     }
+  });
+
+  onDestroy(() => {
+    clearInterval(popoutWatchId);
+    previewChannel?.close();
+    if (previewPopoutWin && !previewPopoutWin.closed) previewPopoutWin.close();
+  });
+
+  $effect(() => {
+    if (!previewPopoutOpen) return;
+    project.elements;
+    project.canvasWidth;
+    project.canvasHeight;
+    currentTime;
+    selectedId;
+    isPlaying;
+    postPreviewSync();
   });
 
   $effect(() => {
@@ -532,15 +628,34 @@
 
   <div class="workspace">
     <main class="preview">
-      <Canvas
-        elements={project.elements}
-        {currentTime}
-        {selectedId}
-        width={project.canvasWidth}
-        height={project.canvasHeight}
-        onSelect={selectFromCanvas}
-        onUpdate={updateElement}
-      />
+      <div class="preview-toolbar">
+        {#if previewPopoutOpen}
+          <span class="preview-hint">Preview is in a separate window</span>
+          <button type="button" onclick={dockPreview}>Dock preview</button>
+        {:else}
+          <button type="button" onclick={popOutPreview} title="Open canvas preview in a new window">
+            Pop out preview
+          </button>
+        {/if}
+      </div>
+      {#if !previewPopoutOpen}
+        <div class="preview-canvas">
+          <Canvas
+            elements={project.elements}
+            {currentTime}
+            {selectedId}
+            width={project.canvasWidth}
+            height={project.canvasHeight}
+            onSelect={selectFromCanvas}
+            onUpdate={updateElement}
+          />
+        </div>
+      {:else}
+        <p class="preview-placeholder">
+          Use the pop-out window to view and edit the canvas. Click <strong>Dock preview</strong> to
+          bring it back here.
+        </p>
+      {/if}
     </main>
     <PropertiesPanel
       element={selectedElement}
@@ -623,10 +738,47 @@
   .preview {
     flex: 1;
     display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: #0a0a0a;
+  }
+
+  .preview-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    background: #141414;
+  }
+
+  .preview-hint {
+    font-size: 12px;
+    color: #888;
+  }
+
+  .preview-canvas {
+    flex: 1;
+    display: flex;
     align-items: center;
     justify-content: center;
     padding: 16px;
     overflow: auto;
-    background: #0a0a0a;
+    min-height: 0;
+  }
+
+  .preview-placeholder {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 24px;
+    text-align: center;
+    color: #666;
+    font-size: 14px;
+    line-height: 1.5;
   }
 </style>
