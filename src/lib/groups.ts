@@ -75,6 +75,21 @@ export function ungroupElements(project: Project, elementIds: string[]): Project
   };
 }
 
+export function assignElementsToGroup(
+  project: Project,
+  elementIds: string[],
+  groupId: string,
+): Project {
+  if (!(project.groups ?? []).some((g) => g.id === groupId)) return project;
+  const idSet = new Set(elementIds);
+  return {
+    ...project,
+    elements: project.elements.map((el) =>
+      idSet.has(el.id) ? { ...el, groupId } : el,
+    ),
+  };
+}
+
 export function toggleGroupCollapsed(
   project: Project,
   groupId: string,

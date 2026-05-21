@@ -32,6 +32,7 @@
     ungroupElements,
     toggleGroupCollapsed,
     renameGroup,
+    assignElementsToGroup,
   } from './lib/groups';
   import { PREVIEW_CHANNEL, openPreviewPopout } from './lib/previewSync';
 
@@ -350,6 +351,15 @@
     const name = prompt('Group name', group.name);
     if (name === null) return;
     project = renameGroup(project, groupId, name);
+  }
+
+  function handleAssignToGroup(elementIds, groupId) {
+    project = assignElementsToGroup(project, elementIds, groupId);
+    const group = (project.groups ?? []).find((g) => g.id === groupId);
+    if (group?.collapsed) {
+      project = toggleGroupCollapsed(project, groupId);
+    }
+    setSelection(elementIds);
   }
 
   function maxZIndex() {
@@ -680,6 +690,7 @@
     onUngroup={ungroupSelection}
     onDissolveGroup={handleDissolveGroup}
     onRenameGroup={handleRenameGroup}
+    onAssignToGroup={handleAssignToGroup}
   />
 </div>
 

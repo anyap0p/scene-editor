@@ -18,6 +18,7 @@
     onUngroup: () => void,
     onDissolveGroup: (groupId: string) => void,
     onRenameGroup: (groupId: string) => void,
+    onAssignToGroup: (elementIds: string[], groupId: string) => void,
   }} */
   let {
     elements,
@@ -35,6 +36,7 @@
     onUngroup,
     onDissolveGroup,
     onRenameGroup,
+    onAssignToGroup,
   } = $props();
 
   const MIN_CLIP = 0.2;
@@ -45,6 +47,11 @@
 
   let scrollEl = $state(null);
   let dragClip = $state(null);
+  /** @type {{ elementIds: string[], startX: number, startY: number, active?: boolean } | null} */
+  let pendingTrackDrag = $state(null);
+  /** @type {{ elementIds: string[] } | null} */
+  let dragTrack = $state(null);
+  let dropTargetGroupId = $state(null);
   let panelCollapsed = $state(readStoredCollapsed());
   let panelHeight = $state(readStoredHeight());
   let resizing = $state(false);
@@ -139,7 +146,35 @@
   }
 
   function onTrackLabelClick(e, id) {
+    if (dragTrack || pendingTrackDrag?.active) return;
     onSelect(id, e.ctrlKey || e.metaKey);
+  }
+
+  function trackDragIds(el) {
+    if (isSelected(el.id) && selectedIds.length > 0) return [...selectedIds];
+    return [el.id];
+  }
+
+  function onLabelMouseDown(e, el) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    pendingTrackDrag = {
+      elementIds: trackDragIds(el),
+      startX: e.clientX,
+      startY: e.clientY,
+      active: false,
+    };
+  }
+
+  function groupIdAtPoint(clientX, clientY) {
+    const hit = document.elementFromPoint(clientX, clientY);
+    const row = hit?.closest('[data-group-drop]');
+    return row?.getAttribute('data-group-drop') ?? null;
+  }
+
+  function canDropOnGroup(groupId, elementIds) {
+    const moving = elements.filter((e) => elementIds.includes(e.id));
+    return moving.some((e) => e.groupId !== groupId);
   }
 
   function membersFor(groupId) {
@@ -177,6 +212,23 @@
   }
 
   function onWindowMove(e) {
+    if (pendingTrackDrag && !dragClip) {
+      const dy = Math.abs(e.clientY - pendingTrackDrag.startY);
+      const dx = Math.abs(e.clientX - pendingTrackDrag.startX);
+      if (dy > 5 && dy >= dx) {
+        pendingTrackDrag.active = true;
+        dragTrack = { elementIds: pendingTrackDrag.elementIds };
+        pendingTrackDrag = null;
+      }
+    }
+
+    if (dragTrack) {
+      const gid = groupIdAtPoint(e.clientX, e.clientY);
+      dropTargetGroupId =
+        gid && canDropOnGroup(gid, dragTrack.elementIds) ? gid : null;
+      return;
+    }
+
     if (!dragClip) return;
 
     const dx = (e.clientX - dragClip.startX) / pxPerSec;
@@ -212,8 +264,14 @@
     }
   }
 
-  function onWindowUp() {
+  function onWindowUp(e) {
+    if (dragTrack && dropTargetGroupId) {
+      onAssignToGroup(dragTrack.elementIds, dropTargetGroupId);
+    }
     dragClip = null;
+    dragTrack = null;
+    pendingTrackDrag = null;
+    dropTargetGroupId = null;
   }
 
   function ticks() {
@@ -230,6 +288,7 @@
   class="timeline-panel"
   class:collapsed={panelCollapsed}
   class:resizing
+  class:dragging-track={!!dragTrack}
   style={panelCollapsed ? undefined : `height: ${panelHeight}px`}
 >
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -263,7 +322,7 @@
         class="small"
         onclick={onCreateGroup}
         disabled={selectedIds.length === 0}
-        title="Group selected tracks (Ctrl+click to multi-select)"
+        title="Group selected tracks (Ctrl+click to multi-select, or drag labels onto a group)"
       >
         Group
       </button>
@@ -303,6 +362,8 @@
               class="track-row group-row"
               class:selected={groupHasSelection(group.id)}
               class:is-collapsed={group.collapsed}
+              class:drop-target={dropTargetGroupId === group.id}
+              data-group-drop={group.id}
             >
               <div class="label-cell group-label-cell">
                 <button
@@ -350,8 +411,10 @@
                 <div class="track-row child-row" class:selected={isSelected(el.id)}>
                   <button
                     type="button"
-                    class="track-label"
+                    class="track-label draggable"
                     onclick={(e) => onTrackLabelClick(e, el.id)}
+                    onmousedown={(e) => onLabelMouseDown(e, el)}
+                    title="Drag label into a group"
                   >
                     {el.label}
                   </button>
@@ -377,6 +440,15 @@
                   </div>
                 </div>
               {/each}
+              {#if !group.collapsed && members.length === 0}
+                <div
+                  class="track-row group-drop-hint"
+                  class:drop-target={dropTargetGroupId === group.id}
+                  data-group-drop={group.id}
+                >
+                  <span class="drop-hint-text">Drop tracks here</span>
+                </div>
+              {/if}
             {/if}
           {/each}
 
@@ -384,8 +456,10 @@
             <div class="track-row" class:selected={isSelected(el.id)}>
               <button
                 type="button"
-                class="track-label"
+                class="track-label draggable"
                 onclick={(e) => onTrackLabelClick(e, el.id)}
+                onmousedown={(e) => onLabelMouseDown(e, el)}
+                title="Drag label into a group"
               >
                 {el.label}
               </button>
@@ -609,6 +683,48 @@
 
   .group-row.is-collapsed {
     background: #1e1e1e;
+  }
+
+  .group-row.drop-target,
+  .group-drop-hint.drop-target {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    background: #2a3348;
+  }
+
+  .timeline-panel.dragging-track {
+    user-select: none;
+  }
+
+  .timeline-panel.dragging-track .track-label.draggable {
+    cursor: grabbing;
+  }
+
+  .track-label.draggable {
+    cursor: grab;
+  }
+
+  .track-label.draggable:active {
+    cursor: grabbing;
+  }
+
+  .group-drop-hint {
+    height: 28px;
+    margin-left: -120px;
+    width: calc(100% + 120px);
+    padding-left: 36px;
+    display: flex;
+    align-items: center;
+  }
+
+  .drop-hint-text {
+    font-size: 11px;
+    color: #555;
+    font-style: italic;
+  }
+
+  .group-drop-hint.drop-target .drop-hint-text {
+    color: var(--accent);
   }
 
   .label-cell {
