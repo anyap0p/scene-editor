@@ -11,8 +11,12 @@ export type PreviewSyncMessage =
       selectedId: string | null;
       canvasWidth: number;
       canvasHeight: number;
+      duration: number;
       isPlaying: boolean;
+      playbackStartedAt: number;
+      playFrom: number;
     }
+  | { type: 'tick'; currentTime: number; playbackStartedAt: number; playFrom: number }
   | { type: 'select'; id: string | null }
   | { type: 'update'; id: string; patch: Partial<SceneElement> }
   | { type: 'seek'; time: number }

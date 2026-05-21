@@ -36,6 +36,7 @@
   } from './lib/groups';
   import { PREVIEW_CHANNEL, openPreviewPopout } from './lib/previewSync';
   import { centerElementsEach, centerElementsAsGroup } from './lib/align';
+  import { createUndoStack } from './lib/history';
 
   let project = $state(defaultProject());
   let activeProjectId = $state(null);
@@ -72,6 +73,47 @@
   /** @type {BroadcastChannel | null} */
   let previewChannel = null;
   let popoutWatchId = 0;
+  const undoStack = createUndoStack();
+  let canUndo = $state(false);
+  let canRedo = $state(false);
+  let gestureDepth = 0;
+
+  function refreshUndoState() {
+    canUndo = undoStack.canUndo();
+    canRedo = undoStack.canRedo();
+  }
+
+  function recordUndo() {
+    undoStack.push(project);
+    refreshUndoState();
+  }
+
+  function beginGesture() {
+    if (gestureDepth === 0) recordUndo();
+    gestureDepth += 1;
+  }
+
+  function endGesture() {
+    gestureDepth = Math.max(0, gestureDepth - 1);
+  }
+
+  function restoreProject(snapshot) {
+    undoStack.setRecording(false);
+    project = normalizeProject(snapshot);
+    undoStack.setRecording(true);
+    refreshUndoState();
+    postPreviewSync();
+  }
+
+  function undo() {
+    const prev = undoStack.undo(project);
+    if (prev) restoreProject(prev);
+  }
+
+  function redo() {
+    const next = undoStack.redo(project);
+    if (next) restoreProject(next);
+  }
 
   async function refreshProjectList() {
     projectList = await listProjectMetas();
@@ -122,6 +164,8 @@
     setActiveId(id);
     project = normalizeProject(stored.project);
     resetPlayback();
+    undoStack.clear();
+    recordUndo();
     await refreshProjectList();
     skipAutosave = false;
     saveStatus = 'idle';
@@ -162,7 +206,20 @@
       selectedId,
       canvasWidth: project.canvasWidth,
       canvasHeight: project.canvasHeight,
+      duration: project.duration,
       isPlaying,
+      playbackStartedAt: playStart,
+      playFrom,
+    });
+  }
+
+  function postPreviewTick() {
+    if (!previewChannel || !previewPopoutOpen || !isPlaying) return;
+    previewChannel.postMessage({
+      type: 'tick',
+      currentTime,
+      playbackStartedAt: playStart,
+      playFrom,
     });
   }
 
@@ -177,13 +234,20 @@
         postPreviewSync();
         break;
       case 'update':
-        updateElement(msg.id, msg.patch);
+        updateElement(msg.id, msg.patch, { skipHistory: true });
         break;
       case 'seek':
         seek(msg.time);
+        postPreviewSync();
         break;
       case 'play':
         if (msg.playing !== isPlaying) togglePlay();
+        break;
+      case 'tick':
+        if (!isPlaying) break;
+        currentTime = msg.currentTime;
+        playFrom = msg.playFrom;
+        playStart = msg.playbackStartedAt;
         break;
     }
   }
@@ -230,6 +294,8 @@
       const id = await ensureProjects();
       await refreshProjectList();
       await loadProjectById(id);
+      undoStack.clear();
+      recordUndo();
       dbReady = true;
     } catch (err) {
       console.error('Failed to open local database', err);
@@ -284,31 +350,40 @@
     return () => clearTimeout(timer);
   });
 
-  function updateElement(id, patch) {
+  function updateElement(id, patch, opts = {}) {
+    if (!opts.skipHistory && gestureDepth === 0) recordUndo();
     project.elements = project.elements.map((el) =>
       el.id === id ? { ...el, ...patch } : el,
     );
   }
 
-  function updateTiming(id, start, end) {
+  function updateElementFromPanel(id, patch) {
+    recordUndo();
+    updateElement(id, patch, { skipHistory: true });
+  }
+
+  function updateTiming(id, start, end, opts = {}) {
     const s = clamp(start, 0, project.duration);
     const e = clamp(end, s + 0.1, project.duration);
-    updateElement(id, { start: s, end: e });
+    updateElement(id, { start: s, end: e }, opts);
   }
 
   function addElement(type) {
+    recordUndo();
     const el = defaultElement(type, project.duration);
     el.zIndex = project.elements.length + 1;
     project.elements = [...project.elements, el];
-    selectedId = el.id;
+    setSelection([el.id]);
   }
 
   function deleteElement(id) {
+    recordUndo();
     project.elements = project.elements.filter((e) => e.id !== id);
     setSelection(timelineSelection.filter((sid) => sid !== id));
   }
 
   function createGroupFromSelection() {
+    recordUndo();
     const ids =
       timelineSelection.length > 0
         ? timelineSelection
@@ -323,6 +398,7 @@
   }
 
   function ungroupSelection() {
+    recordUndo();
     const ids =
       timelineSelection.length > 0
         ? timelineSelection
@@ -335,6 +411,7 @@
 
   function handleDissolveGroup(groupId) {
     if (!confirm('Dissolve this group? Tracks will be ungrouped.')) return;
+    recordUndo();
     project = dissolveGroup(project, groupId);
     setSelection(timelineSelection.filter((id) => {
       const el = project.elements.find((e) => e.id === id);
@@ -355,6 +432,7 @@
   }
 
   function handleAssignToGroup(elementIds, groupId) {
+    recordUndo();
     project = assignElementsToGroup(project, elementIds, groupId);
     const group = (project.groups ?? []).find((g) => g.id === groupId);
     if (group?.collapsed) {
@@ -376,6 +454,7 @@
   }
 
   function centerSelectionEach() {
+    recordUndo();
     const ids = getAlignTargetIds();
     if (ids.length === 0) return;
     const els = project.elements.filter((e) => ids.includes(e.id));
@@ -385,6 +464,7 @@
   }
 
   function centerSelectionAsGroup() {
+    recordUndo();
     const ids = getAlignTargetIds();
     if (ids.length === 0) return;
     const els = project.elements.filter((e) => ids.includes(e.id));
@@ -417,6 +497,7 @@
 
   function insertPastedElements(sources) {
     if (sources.length === 0) return;
+    recordUndo();
     pasteCount += 1;
     const pasted = duplicateElements(sources, maxZIndex(), pasteCount);
     project.elements = [...project.elements, ...pasted];
@@ -462,6 +543,16 @@
     }
 
     const key = e.key.toLowerCase();
+    if (key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      undo();
+      return;
+    }
+    if (key === 'y' || (key === 'z' && e.shiftKey)) {
+      e.preventDefault();
+      redo();
+      return;
+    }
     if (key === 'c') {
       if (!selectedId) return;
       e.preventDefault();
@@ -492,6 +583,7 @@
   async function onImagePick(e) {
     const file = e.currentTarget.files?.[0];
     if (!file) return;
+    recordUndo();
     const src = await readFileAsDataUrl(file);
     const el = defaultElement('image', project.duration);
     el.src = src;
@@ -505,6 +597,7 @@
   async function onVideoPick(e) {
     const file = e.currentTarget.files?.[0];
     if (!file) return;
+    recordUndo();
     const src = await readFileAsDataUrl(file);
     const el = defaultElement('video', project.duration);
     el.src = src;
@@ -519,6 +612,7 @@
     if (!isPlaying) return;
     const elapsed = (ts - playStart) / 1000;
     currentTime = (playFrom + elapsed) % project.duration;
+    postPreviewTick();
     rafId = requestAnimationFrame(tick);
   }
 
@@ -526,10 +620,12 @@
     if (isPlaying) {
       isPlaying = false;
       cancelAnimationFrame(rafId);
+      postPreviewSync();
     } else {
       isPlaying = true;
       playStart = performance.now();
       playFrom = currentTime;
+      postPreviewSync();
       rafId = requestAnimationFrame(tick);
     }
   }
@@ -540,6 +636,7 @@
       playFrom = currentTime;
       playStart = performance.now();
     }
+    postPreviewSync();
   }
 
   function exportJson() {
@@ -578,6 +675,8 @@
           elements: data.elements ?? [],
           groups: data.groups ?? [],
         });
+        undoStack.clear();
+        recordUndo();
         resetPlayback();
         if (activeProjectId) {
           await putProject(activeProjectId, project);
@@ -653,6 +752,12 @@
     </div>
 
     <div class="group">
+      <button type="button" disabled={!canUndo} onclick={undo} title="Undo (Ctrl+Z)">
+        Undo
+      </button>
+      <button type="button" disabled={!canRedo} onclick={redo} title="Redo (Ctrl+Y)">
+        Redo
+      </button>
       <button type="button" class="primary" onclick={togglePlay}>
         {isPlaying ? 'Pause' : 'Play'}
       </button>
@@ -708,6 +813,8 @@
             height={project.canvasHeight}
             onSelect={selectFromCanvas}
             onUpdate={updateElement}
+            onGestureStart={beginGesture}
+            onGestureEnd={endGesture}
           />
         </div>
       {:else}
@@ -720,7 +827,7 @@
     <PropertiesPanel
       element={selectedElement}
       selectionCount={timelineSelection.length || (selectedId ? 1 : 0)}
-      onUpdate={updateElement}
+      onUpdate={updateElementFromPanel}
       onDelete={deleteElement}
       onCenterEach={centerSelectionEach}
       onCenterGroup={centerSelectionAsGroup}
@@ -744,6 +851,8 @@
     onDissolveGroup={handleDissolveGroup}
     onRenameGroup={handleRenameGroup}
     onAssignToGroup={handleAssignToGroup}
+    onGestureStart={beginGesture}
+    onGestureEnd={endGesture}
   />
 </div>
 

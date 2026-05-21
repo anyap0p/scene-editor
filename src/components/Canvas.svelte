@@ -1,6 +1,16 @@
 <script>
-  /** @type {{ elements: import('../lib/types').SceneElement[], currentTime: number, selectedId: string | null, width: number, height: number, onSelect: (id: string | null) => void, onUpdate: (id: string, patch: Partial<import('../lib/types').SceneElement>) => void }} */
-  let { elements, currentTime, selectedId, width, height, onSelect, onUpdate } = $props();
+  /** @type {{ elements: import('../lib/types').SceneElement[], currentTime: number, selectedId: string | null, width: number, height: number, onSelect: (id: string | null) => void, onUpdate: (id: string, patch: Partial<import('../lib/types').SceneElement>) => void, onGestureStart?: () => void, onGestureEnd?: () => void }} */
+  let {
+    elements,
+    currentTime,
+    selectedId,
+    width,
+    height,
+    onSelect,
+    onUpdate,
+    onGestureStart,
+    onGestureEnd,
+  } = $props();
 
   let drag = $state(null);
 
@@ -18,6 +28,7 @@
 
   function startDrag(e, el, mode) {
     e.stopPropagation();
+    onGestureStart?.();
     onSelect(el.id);
     drag = {
       id: el.id,
@@ -49,6 +60,7 @@
   }
 
   function onWindowUp() {
+    if (drag) onGestureEnd?.();
     drag = null;
   }
 </script>

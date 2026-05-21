@@ -19,6 +19,8 @@
     onDissolveGroup: (groupId: string) => void,
     onRenameGroup: (groupId: string) => void,
     onAssignToGroup: (elementIds: string[], groupId: string) => void,
+    onGestureStart?: () => void,
+    onGestureEnd?: () => void,
   }} */
   let {
     elements,
@@ -37,6 +39,8 @@
     onDissolveGroup,
     onRenameGroup,
     onAssignToGroup,
+    onGestureStart,
+    onGestureEnd,
   } = $props();
 
   const MIN_CLIP = 0.2;
@@ -183,6 +187,7 @@
 
   function startClipDrag(e, el, mode) {
     e.stopPropagation();
+    onGestureStart?.();
     onSelect(el.id, false);
     dragClip = {
       kind: 'element',
@@ -196,6 +201,7 @@
 
   function startGroupDrag(e, groupId, mode) {
     e.stopPropagation();
+    onGestureStart?.();
     const members = membersFor(groupId);
     if (members.length === 0) return;
     onSelectGroup(groupId);
@@ -242,13 +248,13 @@
         const len = dragClip.origEnd - dragClip.origStart;
         let start = snapTime(dragClip.origStart + dt);
         start = clamp(start, 0, duration - len);
-        onUpdateTiming(dragClip.id, start, start + len);
-      } else if (dragClip.mode === 'trim-left') {
+      onUpdateTiming(dragClip.id, start, start + len, { skipHistory: true });
+    } else if (dragClip.mode === 'trim-left') {
         let start = snapTime(clamp(dragClip.origStart + dt, 0, dragClip.origEnd - MIN_CLIP));
-        onUpdateTiming(dragClip.id, start, el.end);
-      } else if (dragClip.mode === 'trim-right') {
-        let end = snapTime(clamp(dragClip.origEnd + dt, dragClip.origStart + MIN_CLIP, duration));
-        onUpdateTiming(dragClip.id, el.start, end);
+      onUpdateTiming(dragClip.id, start, el.end, { skipHistory: true });
+    } else if (dragClip.mode === 'trim-right') {
+      let end = snapTime(clamp(dragClip.origEnd + dt, dragClip.origStart + MIN_CLIP, duration));
+      onUpdateTiming(dragClip.id, el.start, end, { skipHistory: true });
       }
     } else if (dragClip.kind === 'group' && dragClip.mode === 'move') {
       const len = dragClip.origEnd - dragClip.origStart;
@@ -259,7 +265,7 @@
         const mlen = m.end - m.start;
         let start = snapTime(m.start + delta);
         start = clamp(start, 0, duration - mlen);
-        onUpdateTiming(m.id, start, start + mlen);
+        onUpdateTiming(m.id, start, start + mlen, { skipHistory: true });
       }
     }
   }
@@ -268,6 +274,7 @@
     if (dragTrack && dropTargetGroupId) {
       onAssignToGroup(dragTrack.elementIds, dropTargetGroupId);
     }
+    if (dragClip || dragTrack) onGestureEnd?.();
     dragClip = null;
     dragTrack = null;
     pendingTrackDrag = null;

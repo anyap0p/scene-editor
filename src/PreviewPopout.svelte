@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import Canvas from './components/Canvas.svelte';
+  import ScaledStage from './components/ScaledStage.svelte';
   import { PREVIEW_CHANNEL } from './lib/previewSync';
   import { formatTime } from './lib/time';
 
@@ -10,6 +11,7 @@
   let selectedId = $state(null);
   let canvasWidth = $state(800);
   let canvasHeight = $state(600);
+  let duration = $state(10);
   let isPlaying = $state(false);
   let connected = $state(false);
 
@@ -26,8 +28,14 @@
     selectedId = msg.selectedId;
     canvasWidth = msg.canvasWidth;
     canvasHeight = msg.canvasHeight;
+    duration = msg.duration;
     isPlaying = msg.isPlaying;
     connected = true;
+  }
+
+  function applyTick(msg) {
+    currentTime = msg.currentTime;
+    isPlaying = true;
   }
 
   onMount(() => {
@@ -35,6 +43,7 @@
     channel.onmessage = (e) => {
       const msg = e.data;
       if (msg?.type === 'sync') applySync(msg);
+      else if (msg?.type === 'tick') applyTick(msg);
     };
     post({ type: 'ready' });
     document.title = 'Scene Preview';
@@ -53,26 +62,35 @@
     elements = elements.map((el) => (el.id === id ? { ...el, ...patch } : el));
     post({ type: 'update', id, patch });
   }
+
+  function togglePlay() {
+    post({ type: 'play', playing: !isPlaying });
+  }
 </script>
 
 <div class="popout-app">
   <header class="popout-bar">
     <span class="title">Scene preview</span>
-    <span class="time">{formatTime(currentTime)}</span>
+    <button type="button" class="primary" onclick={togglePlay}>
+      {isPlaying ? 'Pause' : 'Play'}
+    </button>
+    <span class="time">{formatTime(currentTime)} / {formatTime(duration)}</span>
     {#if !connected}
       <span class="waiting">Waiting for editor…</span>
     {/if}
   </header>
   <main class="popout-stage">
-    <Canvas
-      {elements}
-      {currentTime}
-      {selectedId}
-      width={canvasWidth}
-      height={canvasHeight}
-      onSelect={onSelect}
-      onUpdate={onUpdate}
-    />
+    <ScaledStage width={canvasWidth} height={canvasHeight}>
+      <Canvas
+        {elements}
+        {currentTime}
+        {selectedId}
+        width={canvasWidth}
+        height={canvasHeight}
+        onSelect={onSelect}
+        onUpdate={onUpdate}
+      />
+    </ScaledStage>
   </main>
 </div>
 
@@ -119,9 +137,7 @@
   .popout-stage {
     flex: 1;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: auto;
-    padding: 16px;
+    min-height: 0;
+    min-width: 0;
   }
 </style>
