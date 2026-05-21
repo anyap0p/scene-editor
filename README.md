@@ -22,10 +22,6 @@ Open the URL shown in the terminal (usually `http://localhost:5173`).
 4. **Properties** — Edit label, text, colors, start/end times, and z-index for the selected element.
 5. **Export** — **Export HTML** downloads a self-contained page for Kindle/browser. **Save JSON** saves the project to reopen later with **Load JSON**.
 
-## Kindle / offline
-
-Exported HTML embeds images and videos as data URLs when you used file uploads, so a single `.html` file can work. Large videos make huge files — prefer GIFs or short clips for e-ink.
-
 ## Project layout
 
 ```
