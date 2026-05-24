@@ -27,6 +27,7 @@
   }
 
   function startDrag(e, el, mode) {
+    e.preventDefault();
     e.stopPropagation();
     onGestureStart?.();
     onSelect(el.id);
@@ -70,6 +71,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="canvas"
+  class:is-dragging={!!drag}
   style="width: {width}px; height: {height}px;"
   onclick={onCanvasDown}
   onkeydown={() => {}}
@@ -82,7 +84,8 @@
       <div
         class="el"
         class:selected={selectedId === el.id}
-        style="left: {el.x}px; top: {el.y}px; width: {el.width}px; height: {el.height}px; z-index: {el.zIndex}; {el.type === 'text' ? `font-size: ${el.fontSize || 24}px; color: ${el.color || '#fff'}; font-weight: ${el.fontWeight || 'normal'};` : ''}"
+        class:dragging={drag?.id === el.id}
+        style="left: {el.x}px; top: {el.y}px; width: {el.width}px; height: {el.height}px; z-index: {drag?.id === el.id ? 10000 : el.zIndex}; {el.type === 'text' ? `font-size: ${el.fontSize || 24}px; color: ${el.color || '#fff'}; font-weight: ${el.fontWeight || 'normal'};` : ''}"
         onmousedown={(e) => startDrag(e, el, 'move')}
       >
         {#if el.type === 'text'}
@@ -114,6 +117,15 @@
     border-radius: 8px;
     overflow: hidden;
     flex-shrink: 0;
+    user-select: none;
+  }
+
+  .canvas.is-dragging {
+    cursor: grabbing;
+  }
+
+  .canvas.is-dragging .el:not(.dragging) {
+    pointer-events: none;
   }
 
   .el {
@@ -122,6 +134,7 @@
     border: 2px solid transparent;
     border-radius: 4px;
     overflow: hidden;
+    user-select: none;
   }
 
   .el.selected {
@@ -129,7 +142,7 @@
     box-shadow: 0 0 0 1px var(--accent);
   }
 
-  .el:active {
+  .el.dragging {
     cursor: grabbing;
   }
 

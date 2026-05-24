@@ -56,6 +56,7 @@
   /** @type {{ elementIds: string[] } | null} */
   let dragTrack = $state(null);
   let dropTargetGroupId = $state(null);
+  let suppressLabelClick = false;
   let panelCollapsed = $state(readStoredCollapsed());
   let panelHeight = $state(readStoredHeight());
   let resizing = $state(false);
@@ -145,12 +146,34 @@
     return selectedIds.includes(id);
   }
 
-  function groupHasSelection(groupId) {
+  function isTrackSelected(id) {
+    if (dragClip?.kind === 'element') return dragClip.id === id;
+    if (dragClip?.kind === 'group') {
+      return dragClip.members?.some((m) => m.id === id) ?? false;
+    }
+    return isSelected(id);
+  }
+
+  function isClipSelected(id) {
+    if (dragClip?.kind === 'element') return dragClip.id === id;
+    if (dragClip?.kind === 'group') {
+      return dragClip.members?.some((m) => m.id === id) ?? false;
+    }
+    return isSelected(id);
+  }
+
+  function groupRowSelected(groupId) {
+    if (dragClip?.kind === 'element') return false;
+    if (dragClip?.kind === 'group') return dragClip.groupId === groupId;
     return elements.some((e) => e.groupId === groupId && isSelected(e.id));
   }
 
   function onTrackLabelClick(e, id) {
     if (dragTrack || pendingTrackDrag?.active) return;
+    if (suppressLabelClick) {
+      suppressLabelClick = false;
+      return;
+    }
     onSelect(id, e.ctrlKey || e.metaKey);
   }
 
@@ -186,6 +209,7 @@
   }
 
   function startClipDrag(e, el, mode) {
+    e.preventDefault();
     e.stopPropagation();
     onGestureStart?.();
     onSelect(el.id, false);
@@ -271,6 +295,7 @@
   }
 
   function onWindowUp(e) {
+    const didDrag = !!(dragClip || dragTrack);
     if (dragTrack && dropTargetGroupId) {
       onAssignToGroup(dragTrack.elementIds, dropTargetGroupId);
     }
@@ -279,6 +304,7 @@
     dragTrack = null;
     pendingTrackDrag = null;
     dropTargetGroupId = null;
+    if (didDrag) suppressLabelClick = true;
   }
 
   function ticks() {
@@ -367,7 +393,7 @@
             {@const bounds = groupBounds(members)}
             <div
               class="track-row group-row"
-              class:selected={groupHasSelection(group.id)}
+              class:selected={groupRowSelected(group.id)}
               class:is-collapsed={group.collapsed}
               class:drop-target={dropTargetGroupId === group.id}
               data-group-drop={group.id}
@@ -415,7 +441,7 @@
 
             {#if !group.collapsed}
               {#each members as el (el.id)}
-                <div class="track-row child-row" class:selected={isSelected(el.id)}>
+                <div class="track-row child-row" class:selected={isTrackSelected(el.id)}>
                   <button
                     type="button"
                     class="track-label draggable"
@@ -429,7 +455,7 @@
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div
                       class="clip"
-                      class:selected={isSelected(el.id)}
+                      class:selected={isClipSelected(el.id)}
                       style="left: {el.start * pxPerSec}px; width: {(el.end - el.start) * pxPerSec}px;"
                       onmousedown={(e) => startClipDrag(e, el, 'move')}
                     >
@@ -460,7 +486,7 @@
           {/each}
 
           {#each looseElements as el (el.id)}
-            <div class="track-row" class:selected={isSelected(el.id)}>
+            <div class="track-row" class:selected={isTrackSelected(el.id)}>
               <button
                 type="button"
                 class="track-label draggable"
@@ -474,7 +500,7 @@
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                   class="clip"
-                  class:selected={isSelected(el.id)}
+                  class:selected={isClipSelected(el.id)}
                   style="left: {el.start * pxPerSec}px; width: {(el.end - el.start) * pxPerSec}px;"
                   onmousedown={(e) => startClipDrag(e, el, 'move')}
                 >
