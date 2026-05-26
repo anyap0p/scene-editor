@@ -1,4 +1,5 @@
 import type { Project } from './types';
+import { googleFontsLinkTag, resolveFontFamily } from './fonts';
 
 export function exportProjectJson(project: Project): string {
   return JSON.stringify(project, null, 2);
@@ -12,6 +13,7 @@ export function exportStandaloneHtml(project: Project): string {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${escapeHtml(project.name)}</title>
+  ${googleFontsLinkTag()}
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -65,9 +67,14 @@ export function exportStandaloneHtml(project: Project): string {
 
       if (el.type === 'text') {
         node.textContent = el.text || '';
+        node.style.fontFamily = resolveFontFamily(el.fontFamily);
         node.style.fontSize = (el.fontSize || 24) + 'px';
         node.style.color = el.color || '#fff';
         node.style.fontWeight = el.fontWeight || 'normal';
+        if (el.rotation) {
+          node.style.transform = 'rotate(' + el.rotation + 'deg)';
+          node.style.transformOrigin = 'center center';
+        }
       } else if (el.type === 'image') {
         const img = document.createElement('img');
         img.src = el.src || '';

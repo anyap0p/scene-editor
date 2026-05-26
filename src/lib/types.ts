@@ -17,6 +17,9 @@ export interface SceneElement {
   fontSize?: number;
   color?: string;
   fontWeight?: string;
+  fontFamily?: string;
+  /** Rotation in degrees (text elements). */
+  rotation?: number;
 }
 
 export interface TimelineGroup {
@@ -66,6 +69,8 @@ export function defaultElement(type: ElementType, duration: number): SceneElemen
       fontSize: 28,
       color: '#ffffff',
       fontWeight: '600',
+      fontFamily: 'Inter, sans-serif',
+      rotation: 0,
     };
   }
 
