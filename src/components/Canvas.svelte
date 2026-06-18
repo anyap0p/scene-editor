@@ -1,7 +1,9 @@
 <script>
   import { resolveFontFamily } from '../lib/fonts';
+  import { isGifSrc, scaledLocalTime } from '../lib/media';
+  import GifCanvas from './GifCanvas.svelte';
 
-  /** @type {{ elements: import('../lib/types').SceneElement[], currentTime: number, selectedId: string | null, width: number, height: number, onSelect: (id: string | null) => void, onUpdate: (id: string, patch: Partial<import('../lib/types').SceneElement>) => void, onGestureStart?: () => void, onGestureEnd?: () => void }} */
+  /** @type {{ elements: import('../lib/types').SceneElement[], currentTime: number, selectedId: string | null, width: number, height: number, onSelect: (id: string | null) => void, onUpdate: (id: string, patch: Partial<import('../lib/types').SceneElement>, opts?: { skipHistory?: boolean }) => void, onGestureStart?: () => void, onGestureEnd?: () => void }} */
   let {
     elements,
     currentTime,
@@ -14,6 +16,23 @@
     onGestureEnd,
   } = $props();
 
+  /** @type {null | {
+    id: string,
+    mode: 'move' | 'resize' | 'rotate',
+    startX: number,
+    startY: number,
+    origX: number,
+    origY: number,
+    origW: number,
+    origH: number,
+    origRotation: number,
+    startAngle: number,
+    liveX?: number,
+    liveY?: number,
+    liveW?: number,
+    liveH?: number,
+    liveRotation?: number,
+  }} */
   let drag = $state(null);
 
   function visible(el) {
@@ -28,8 +47,29 @@
     if (e.target === e.currentTarget) onSelect(null);
   }
 
+  function elementGeometry(el) {
+    if (drag?.id !== el.id) {
+      return {
+        x: el.x,
+        y: el.y,
+        width: el.width,
+        height: el.height,
+        rotation: el.rotation ?? 0,
+      };
+    }
+
+    return {
+      x: drag.liveX ?? el.x,
+      y: drag.liveY ?? el.y,
+      width: drag.liveW ?? el.width,
+      height: drag.liveH ?? el.height,
+      rotation: drag.liveRotation ?? el.rotation ?? 0,
+    };
+  }
+
   function elementCenter(el) {
-    return { x: el.x + el.width / 2, y: el.y + el.height / 2 };
+    const geo = elementGeometry(el);
+    return { x: geo.x + geo.width / 2, y: geo.y + geo.height / 2 };
   }
 
   function pointerAngle(el, clientX, clientY) {
@@ -38,9 +78,13 @@
   }
 
   function elementStyle(el) {
-    const rot = el.rotation ?? 0;
-    let s = `left: ${el.x}px; top: ${el.y}px; width: ${el.width}px; height: ${el.height}px; z-index: ${drag?.id === el.id ? 10000 : el.zIndex};`;
-    if (rot) s += ` transform: rotate(${rot}deg); transform-origin: center center;`;
+    const geo = elementGeometry(el);
+    const isDragging = drag?.id === el.id;
+    let s = `left: ${geo.x}px; top: ${geo.y}px; width: ${geo.width}px; height: ${geo.height}px; z-index: ${isDragging ? 10000 : el.zIndex};`;
+    if (geo.rotation) {
+      s += ` transform: rotate(${geo.rotation}deg); transform-origin: center center;`;
+    }
+    if (isDragging) s += ' will-change: left, top, width, height, transform;';
     if (el.type === 'text') {
       const family = resolveFontFamily(el.fontFamily).replace(/"/g, "'");
       s += ` font-family: ${family}; font-size: ${el.fontSize || 24}px; color: ${el.color || '#fff'}; font-weight: ${el.fontWeight || 'normal'};`;
@@ -62,6 +106,8 @@
       origY: el.y,
       origW: el.width,
       origH: el.height,
+      origRotation: el.rotation ?? 0,
+      startAngle: 0,
     };
   }
 
@@ -73,6 +119,12 @@
     drag = {
       id: el.id,
       mode: 'rotate',
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: el.x,
+      origY: el.y,
+      origW: el.width,
+      origH: el.height,
       origRotation: el.rotation ?? 0,
       startAngle: pointerAngle(el, e.clientX, e.clientY),
     };
@@ -85,26 +137,67 @@
 
     const dx = e.clientX - drag.startX;
     const dy = e.clientY - drag.startY;
+
     if (drag.mode === 'move') {
-      onUpdate(drag.id, {
-        x: Math.round(drag.origX + dx),
-        y: Math.round(drag.origY + dy),
-      });
+      drag = {
+        ...drag,
+        liveX: Math.round(drag.origX + dx),
+        liveY: Math.round(drag.origY + dy),
+      };
     } else if (drag.mode === 'resize') {
-      onUpdate(drag.id, {
-        width: Math.max(40, Math.round(drag.origW + dx)),
-        height: Math.max(24, Math.round(drag.origH + dy)),
-      });
+      drag = {
+        ...drag,
+        liveW: Math.max(40, Math.round(drag.origW + dx)),
+        liveH: Math.max(24, Math.round(drag.origH + dy)),
+      };
     } else if (drag.mode === 'rotate') {
       const angle = pointerAngle(el, e.clientX, e.clientY);
       const delta = angle - drag.startAngle;
-      onUpdate(drag.id, { rotation: Math.round(drag.origRotation + delta) });
+      drag = {
+        ...drag,
+        liveRotation: Math.round(drag.origRotation + delta),
+      };
+    }
+  }
+
+  function commitDrag() {
+    if (!drag) return;
+
+    if (drag.mode === 'move' && drag.liveX != null && drag.liveY != null) {
+      onUpdate(drag.id, { x: drag.liveX, y: drag.liveY }, { skipHistory: true });
+    } else if (drag.mode === 'resize' && drag.liveW != null && drag.liveH != null) {
+      onUpdate(
+        drag.id,
+        { width: drag.liveW, height: drag.liveH },
+        { skipHistory: true },
+      );
+    } else if (drag.mode === 'rotate' && drag.liveRotation != null) {
+      onUpdate(drag.id, { rotation: drag.liveRotation }, { skipHistory: true });
     }
   }
 
   function onWindowUp() {
-    if (drag) onGestureEnd?.();
+    if (!drag) return;
+    commitDrag();
+    onGestureEnd?.();
     drag = null;
+  }
+
+  /** @param {HTMLVideoElement} node */
+  function syncVideo(node, params) {
+    function update() {
+      const visible =
+        params.currentTime >= params.start && params.currentTime < params.end;
+      if (!visible) {
+        node.pause();
+        return;
+      }
+      const local = scaledLocalTime(params.currentTime, params.start, params.speed);
+      if (Math.abs(node.currentTime - local) > 0.05) node.currentTime = local;
+      node.play().catch(() => {});
+    }
+    update();
+    return { update };
   }
 </script>
 
@@ -121,42 +214,60 @@
   aria-label="Scene canvas"
 >
   {#each sorted() as el (el.id)}
-    {#if visible(el)}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="el"
-        class:selected={selectedId === el.id}
-        class:dragging={drag?.id === el.id}
-        class:is-text={el.type === 'text'}
-        style={elementStyle(el)}
-        onmousedown={(e) => startDrag(e, el, 'move')}
-      >
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="el"
+      class:visible={visible(el)}
+      class:selected={selectedId === el.id}
+      class:dragging={drag?.id === el.id}
+      class:is-text={el.type === 'text'}
+      style={elementStyle(el)}
+      onmousedown={(e) => startDrag(e, el, 'move')}
+    >
+      {#if el.type === 'text'}
+        <span class="text-inner">{el.text || ''}</span>
+      {:else if el.type === 'image' && el.src && isGifSrc(el.src)}
+        <GifCanvas
+          src={el.src}
+          {currentTime}
+          start={el.start}
+          playbackSpeed={el.playbackSpeed}
+        />
+      {:else if el.type === 'image' && el.src}
+        <img src={el.src} alt="" draggable="false" />
+      {:else if el.type === 'video' && el.src}
+        <video
+          src={el.src}
+          muted
+          playsinline
+          loop
+          draggable="false"
+          use:syncVideo={{
+            currentTime,
+            start: el.start,
+            end: el.end,
+            speed: el.playbackSpeed,
+          }}
+        ></video>
+      {:else}
+        <span class="placeholder">{el.type}</span>
+      {/if}
+      {#if selectedId === el.id}
         {#if el.type === 'text'}
-          <span class="text-inner">{el.text || ''}</span>
-        {:else if el.type === 'image' && el.src}
-          <img src={el.src} alt="" draggable="false" />
-        {:else if el.type === 'video' && el.src}
-          <video src={el.src} muted playsinline loop draggable="false"></video>
-        {:else}
-          <span class="placeholder">{el.type}</span>
-        {/if}
-        {#if selectedId === el.id}
-          {#if el.type === 'text'}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-              class="rotate-handle"
-              onmousedown={(e) => startRotate(e, el)}
-              title="Drag to rotate"
-            ></div>
-          {/if}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
-            class="resize-handle"
-            onmousedown={(e) => startDrag(e, el, 'resize')}
+            class="rotate-handle"
+            onmousedown={(e) => startRotate(e, el)}
+            title="Drag to rotate"
           ></div>
         {/if}
-      </div>
-    {/if}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="resize-handle"
+          onmousedown={(e) => startDrag(e, el, 'resize')}
+        ></div>
+      {/if}
+    </div>
   {/each}
 </div>
 
@@ -186,6 +297,11 @@
     border-radius: 4px;
     overflow: hidden;
     user-select: none;
+    display: none;
+  }
+
+  .el.visible {
+    display: block;
   }
 
   .el.selected {
@@ -212,7 +328,8 @@
   }
 
   .el img,
-  .el video {
+  .el video,
+  .el :global(canvas) {
     width: 100%;
     height: 100%;
     object-fit: contain;

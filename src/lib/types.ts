@@ -20,6 +20,8 @@ export interface SceneElement {
   fontFamily?: string;
   /** Rotation in degrees (text elements). */
   rotation?: number;
+  /** Playback speed multiplier for GIF and video (1 = normal, 0.5 = half speed). */
+  playbackSpeed?: number;
 }
 
 export interface TimelineGroup {
@@ -46,7 +48,16 @@ export function newGroupId(): string {
   return `grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function defaultElement(type: ElementType, duration: number): SceneElement {
+export function defaultElement(type: ElementType, duration: number, atTime = 0): SceneElement {
+  const clipLen = Math.min(3, duration);
+  const minClip = 0.2;
+  let start = Math.min(Math.max(atTime, 0), duration);
+  let end = Math.min(start + clipLen, duration);
+  if (end - start < minClip) {
+    start = Math.max(0, end - clipLen);
+    end = Math.min(Math.max(start + minClip, start), duration);
+  }
+
   const id = newId();
   const base = {
     id,
@@ -56,8 +67,8 @@ export function defaultElement(type: ElementType, duration: number): SceneElemen
     y: 80,
     width: type === 'text' ? 280 : 320,
     height: type === 'text' ? 80 : 240,
-    start: 0,
-    end: Math.min(3, duration),
+    start,
+    end,
     zIndex: 1,
   };
 

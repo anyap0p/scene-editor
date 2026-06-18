@@ -66,7 +66,16 @@
   function togglePlay() {
     post({ type: 'play', playing: !isPlaying });
   }
+
+  function onKeyDown(e) {
+    if (e.code === 'Space' || e.key === ' ') {
+      e.preventDefault();
+      togglePlay();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onKeyDown} />
 
 <div class="popout-app">
   <header class="popout-bar">

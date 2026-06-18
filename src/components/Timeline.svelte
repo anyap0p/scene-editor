@@ -19,6 +19,7 @@
     onDissolveGroup: (groupId: string) => void,
     onRenameGroup: (groupId: string) => void,
     onAssignToGroup: (elementIds: string[], groupId: string) => void,
+    embedded?: boolean,
     onGestureStart?: () => void,
     onGestureEnd?: () => void,
   }} */
@@ -41,15 +42,23 @@
     onAssignToGroup,
     onGestureStart,
     onGestureEnd,
+    embedded = false,
   } = $props();
 
   const MIN_CLIP = 0.2;
   const MIN_PANEL_HEIGHT = 100;
   const DEFAULT_PANEL_HEIGHT = 200;
+  const LABEL_WIDTH = 120;
+  /** Must match the zoom slider range in App.svelte */
+  const ZOOM_MIN = 40;
+  const ZOOM_MAX = 160;
   const STORAGE_HEIGHT = 'scene-editor-timeline-height';
   const STORAGE_COLLAPSED = 'scene-editor-timeline-collapsed';
 
   let scrollEl = $state(null);
+  let rulerEl = $state(null);
+  /** Width of the time axis (ruler / lanes), updated when the panel is resized. */
+  let viewportLaneWidth = $state(400);
   let dragClip = $state(null);
   /** @type {{ elementIds: string[], startX: number, startY: number, active?: boolean } | null} */
   let pendingTrackDrag = $state(null);
@@ -61,7 +70,23 @@
   let panelHeight = $state(readStoredHeight());
   let resizing = $state(false);
 
-  let timelineWidth = $derived(Math.max(duration * pxPerSec, 400));
+  /** Pixels/sec when the full duration fits the visible lane (furthest zoom out). */
+  let fitPxPerSec = $derived(
+    duration > 0 ? viewportLaneWidth / duration : ZOOM_MIN,
+  );
+
+  /** Slider 0% = fit to width; 100% = ZOOM_MAX px/s (scroll when longer than the lane). */
+  let pxScale = $derived.by(() => {
+    if (duration <= 0) return pxPerSec;
+    const t = clamp((pxPerSec - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN), 0, 1);
+    return fitPxPerSec + t * (ZOOM_MAX - fitPxPerSec);
+  });
+
+  let timelineWidth = $derived(
+    duration > 0
+      ? Math.max(duration * pxScale, viewportLaneWidth)
+      : viewportLaneWidth,
+  );
   let maxPanelHeight = $derived(
     typeof window !== 'undefined' ? Math.floor(window.innerHeight * 0.75) : 600,
   );
@@ -132,14 +157,35 @@
     window.addEventListener('mouseup', onUp);
   }
 
-  function timeFromX(clientX, rect) {
-    const x = clientX - rect.left + (scrollEl?.scrollLeft ?? 0);
-    return snapTime(clamp(x / pxPerSec, 0, duration));
+  $effect(() => {
+    const el = scrollEl;
+    if (!el) return;
+    const update = () => {
+      viewportLaneWidth = Math.max(100, el.clientWidth - LABEL_WIDTH);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
+  function timeFromClientX(clientX) {
+    const el = rulerEl;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    const w = rect.width;
+    if (w <= 0) return 0;
+    const x = clientX - rect.left;
+    return snapTime(clamp((x / w) * duration, 0, duration));
   }
 
   function onRulerDown(e) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    onSeek(timeFromX(e.clientX, rect));
+    onSeek(timeFromClientX(e.clientX));
+  }
+
+  function onLaneDown(e) {
+    if (e.target !== e.currentTarget) return;
+    onSeek(timeFromClientX(e.clientX));
   }
 
   function isSelected(id) {
@@ -261,7 +307,7 @@
 
     if (!dragClip) return;
 
-    const dx = (e.clientX - dragClip.startX) / pxPerSec;
+    const dx = (e.clientX - dragClip.startX) / pxScale;
     const dt = snapTime(dx);
 
     if (dragClip.kind === 'element') {
@@ -320,14 +366,15 @@
 <section
   class="timeline-panel"
   class:collapsed={panelCollapsed}
+  class:embedded
   class:resizing
   class:dragging-track={!!dragTrack}
-  style={panelCollapsed ? undefined : `height: ${panelHeight}px`}
+  style={panelCollapsed || embedded ? undefined : `height: ${panelHeight}px`}
 >
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="resize-handle"
-    class:hidden={panelCollapsed}
+    class:hidden={panelCollapsed || embedded}
     onmousedown={startResize}
     role="separator"
     aria-orientation="horizontal"
@@ -374,20 +421,24 @@
 
   {#if !panelCollapsed}
     <div class="timeline-scroll" bind:this={scrollEl}>
-      <div class="timeline-inner" style="width: {timelineWidth + 120}px;">
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-          class="ruler"
-          style="width: {timelineWidth}px;"
-          onmousedown={onRulerDown}
-        >
-          {#each ticks() as t}
-            <span class="tick" style="left: {t * pxPerSec}px;">{formatTime(t)}</span>
-          {/each}
-          <div class="playhead" style="left: {currentTime * pxPerSec}px;"></div>
+      <div class="timeline-inner" style="width: {timelineWidth + LABEL_WIDTH}px;">
+        <div class="ruler-row">
+          <div class="ruler-gutter" aria-hidden="true"></div>
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="ruler"
+            bind:this={rulerEl}
+            style="width: {timelineWidth}px;"
+            onmousedown={onRulerDown}
+          >
+            {#each ticks() as t}
+              <span class="tick" style="left: {t * pxScale}px;">{formatTime(t)}</span>
+            {/each}
+            <div class="playhead" style="left: {currentTime * pxScale}px;"></div>
+          </div>
         </div>
 
-        <div class="tracks" style="width: {timelineWidth}px;">
+        <div class="tracks">
           {#each orderedGroups as group (group.id)}
             {@const members = membersFor(group.id)}
             {@const bounds = groupBounds(members)}
@@ -398,7 +449,7 @@
               class:drop-target={dropTargetGroupId === group.id}
               data-group-drop={group.id}
             >
-              <div class="label-cell group-label-cell">
+              <div class="label-cell group-label-cell sticky-label">
                 <button
                   type="button"
                   class="group-toggle"
@@ -427,12 +478,18 @@
                   ×
                 </button>
               </div>
-              <div class="track-lane">
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="track-lane"
+                style="width: {timelineWidth}px;"
+                onmousedown={onLaneDown}
+              >
                 {#if group.collapsed && members.length > 0}
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <div
                     class="clip group-clip"
-                    style="left: {bounds.start * pxPerSec}px; width: {(bounds.end - bounds.start) * pxPerSec}px;"
+                    style="left: {bounds.start * pxScale}px; width: {(bounds.end - bounds.start) * pxScale}px;"
                     onmousedown={(e) => startGroupDrag(e, group.id, 'move')}
                   ></div>
                 {/if}
@@ -444,19 +501,24 @@
                 <div class="track-row child-row" class:selected={isTrackSelected(el.id)}>
                   <button
                     type="button"
-                    class="track-label draggable"
+                    class="track-label draggable sticky-label"
                     onclick={(e) => onTrackLabelClick(e, el.id)}
                     onmousedown={(e) => onLabelMouseDown(e, el)}
                     title="Drag label into a group"
                   >
                     {el.label}
                   </button>
-                  <div class="track-lane">
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div
+                    class="track-lane"
+                    style="width: {timelineWidth}px;"
+                    onmousedown={onLaneDown}
+                  >
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div
                       class="clip"
                       class:selected={isClipSelected(el.id)}
-                      style="left: {el.start * pxPerSec}px; width: {(el.end - el.start) * pxPerSec}px;"
+                      style="left: {el.start * pxScale}px; width: {(el.end - el.start) * pxScale}px;"
                       onmousedown={(e) => startClipDrag(e, el, 'move')}
                     >
                       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -479,7 +541,10 @@
                   class:drop-target={dropTargetGroupId === group.id}
                   data-group-drop={group.id}
                 >
-                  <span class="drop-hint-text">Drop tracks here</span>
+                  <div class="sticky-label drop-hint-label">
+                    <span class="drop-hint-text">Drop tracks here</span>
+                  </div>
+                  <div class="track-lane drop-hint-lane" style="width: {timelineWidth}px;"></div>
                 </div>
               {/if}
             {/if}
@@ -489,19 +554,24 @@
             <div class="track-row" class:selected={isTrackSelected(el.id)}>
               <button
                 type="button"
-                class="track-label draggable"
+                class="track-label draggable sticky-label"
                 onclick={(e) => onTrackLabelClick(e, el.id)}
                 onmousedown={(e) => onLabelMouseDown(e, el)}
                 title="Drag label into a group"
               >
                 {el.label}
               </button>
-              <div class="track-lane">
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="track-lane"
+                style="width: {timelineWidth}px;"
+                onmousedown={onLaneDown}
+              >
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                   class="clip"
                   class:selected={isClipSelected(el.id)}
-                  style="left: {el.start * pxPerSec}px; width: {(el.end - el.start) * pxPerSec}px;"
+                  style="left: {el.start * pxScale}px; width: {(el.end - el.start) * pxScale}px;"
                   onmousedown={(e) => startClipDrag(e, el, 'move')}
                 >
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -534,8 +604,18 @@
     flex-direction: column;
     flex-shrink: 0;
     min-height: 0;
+    min-width: 0;
+    max-width: 100%;
     border-top: 1px solid var(--border);
     background: var(--panel);
+    overflow: hidden;
+  }
+
+  .timeline-panel.embedded {
+    flex: 1;
+    height: 100%;
+    min-height: 0;
+    border-top: none;
   }
 
   .timeline-panel.resizing {
@@ -640,24 +720,78 @@
   }
 
   .timeline-scroll {
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: auto;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     padding: 8px 0;
   }
 
   .timeline-inner {
-    padding-left: 120px;
     position: relative;
+    box-sizing: border-box;
+  }
+
+  .ruler-row {
+    display: flex;
+    align-items: stretch;
+    margin-bottom: 4px;
+  }
+
+  .ruler-gutter {
+    position: sticky;
+    left: 0;
+    z-index: 4;
+    flex-shrink: 0;
+    width: 120px;
+    background: var(--panel);
+    box-shadow: 4px 0 8px -2px rgba(0, 0, 0, 0.45);
   }
 
   .ruler {
     position: relative;
+    flex-shrink: 0;
     height: 28px;
-    margin-bottom: 4px;
     background: #252525;
     border-radius: 4px;
     cursor: pointer;
+  }
+
+  .sticky-label {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    flex-shrink: 0;
+    width: 120px;
+    box-sizing: border-box;
+    background: var(--panel);
+    box-shadow: 4px 0 8px -2px rgba(0, 0, 0, 0.45);
+  }
+
+  .group-row .sticky-label {
+    background: #222;
+  }
+
+  .group-row.is-collapsed .sticky-label {
+    background: #1e1e1e;
+  }
+
+  .group-row.drop-target .sticky-label,
+  .group-drop-hint.drop-target .sticky-label {
+    background: #2a3348;
+  }
+
+  .group-row.selected .sticky-label {
+    background: #222;
+  }
+
+  .group-row.is-collapsed.selected .sticky-label {
+    background: #1e1e1e;
+  }
+
+  .track-row.selected:not(.group-row) .sticky-label {
+    background: var(--panel);
   }
 
   .tick {
@@ -689,17 +823,15 @@
     display: flex;
     align-items: center;
     height: 36px;
-    margin-left: -120px;
-    width: calc(100% + 120px);
+    box-sizing: border-box;
   }
 
   .track-row.child-row {
     height: 32px;
   }
 
-  .track-row.child-row .track-label {
+  .track-row.child-row .track-label.sticky-label {
     padding-left: 28px;
-    width: 112px;
     font-size: 11px;
     color: #bbb;
   }
@@ -743,11 +875,19 @@
 
   .group-drop-hint {
     height: 28px;
-    margin-left: -120px;
-    width: calc(100% + 120px);
-    padding-left: 36px;
+  }
+
+  .drop-hint-label {
     display: flex;
     align-items: center;
+    padding-left: 36px;
+    z-index: 1;
+  }
+
+  .drop-hint-lane {
+    background: transparent;
+    cursor: default;
+    pointer-events: none;
   }
 
   .drop-hint-text {
@@ -763,14 +903,8 @@
   .label-cell {
     display: flex;
     align-items: center;
-    width: 112px;
-    flex-shrink: 0;
-    margin-right: 8px;
     gap: 2px;
-  }
-
-  .group-label-cell {
-    width: 112px;
+    padding-right: 8px;
   }
 
   .group-label {
@@ -811,12 +945,8 @@
   }
 
   .track-label {
-    width: 112px;
-    flex-shrink: 0;
     text-align: left;
     padding: 4px 8px;
-    margin-right: 8px;
-    background: transparent;
     border: none;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -824,16 +954,13 @@
     font-size: 12px;
   }
 
-  .child-row .track-label {
-    margin-right: 8px;
-  }
-
   .track-lane {
     position: relative;
-    flex: 1;
+    flex-shrink: 0;
     height: 28px;
     background: var(--track);
     border-radius: 4px;
+    cursor: pointer;
   }
 
   .child-row .track-lane {

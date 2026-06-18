@@ -48,6 +48,8 @@
   let currentTime = $state(0);
   let selectedId = $state(null);
   let timelineSelection = $state([]);
+  /** Set when a group row is selected on the timeline (including empty groups). */
+  let focusedGroupId = $state(null);
   let isPlaying = $state(false);
   let pxPerSec = $state(80);
 
@@ -123,6 +125,7 @@
     currentTime = 0;
     selectedId = null;
     timelineSelection = [];
+    focusedGroupId = null;
     isPlaying = false;
     cancelAnimationFrame(rafId);
   }
@@ -134,9 +137,11 @@
 
   function selectFromTimeline(id, additive = false) {
     if (!id) {
+      focusedGroupId = null;
       setSelection([]);
       return;
     }
+    if (!additive) focusedGroupId = null;
     if (additive) {
       const next = new Set(timelineSelection);
       if (next.has(id)) next.delete(id);
@@ -148,12 +153,44 @@
   }
 
   function selectFromCanvas(id) {
+    focusedGroupId = null;
     setSelection(id ? [id] : []);
   }
 
   function selectGroup(groupId) {
+    focusedGroupId = groupId;
     const ids = project.elements.filter((e) => e.groupId === groupId).map((e) => e.id);
     setSelection(ids);
+  }
+
+  function groupIdForNewElement() {
+    const groups = project.groups ?? [];
+    if (
+      focusedGroupId &&
+      groups.some((g) => g.id === focusedGroupId)
+    ) {
+      return focusedGroupId;
+    }
+    if (timelineSelection.length === 0) return null;
+    const ids = new Set(
+      timelineSelection
+        .map((id) => project.elements.find((e) => e.id === id)?.groupId)
+        .filter((gid) => gid != null),
+    );
+    return ids.size === 1 ? [...ids][0] : null;
+  }
+
+  function appendNewElement(el) {
+    project.elements = [...project.elements, el];
+    const gid = groupIdForNewElement();
+    if (gid) {
+      project = assignElementsToGroup(project, [el.id], gid);
+      const group = (project.groups ?? []).find((g) => g.id === gid);
+      if (group?.collapsed) {
+        project = toggleGroupCollapsed(project, gid);
+      }
+    }
+    setSelection([el.id]);
   }
 
   async function loadProjectById(id) {
@@ -370,10 +407,9 @@
 
   function addElement(type) {
     recordUndo();
-    const el = defaultElement(type, project.duration);
+    const el = defaultElement(type, project.duration, currentTime);
     el.zIndex = project.elements.length + 1;
-    project.elements = [...project.elements, el];
-    setSelection([el.id]);
+    appendNewElement(el);
   }
 
   function deleteElement(id) {
@@ -413,6 +449,7 @@
     if (!confirm('Dissolve this group? Tracks will be ungrouped.')) return;
     recordUndo();
     project = dissolveGroup(project, groupId);
+    if (focusedGroupId === groupId) focusedGroupId = null;
     setSelection(timelineSelection.filter((id) => {
       const el = project.elements.find((e) => e.id === id);
       return el && el.groupId !== groupId;
@@ -478,9 +515,62 @@
   }
 
   function getSelectedElements() {
-    if (!selectedId) return [];
-    const el = project.elements.find((e) => e.id === selectedId);
-    return el ? [el] : [];
+    const ids =
+      timelineSelection.length > 0
+        ? timelineSelection
+        : selectedId
+          ? [selectedId]
+          : [];
+    return ids
+      .map((id) => project.elements.find((e) => e.id === id))
+      .filter(Boolean);
+  }
+
+  function pasteAnchorEnd() {
+    const ids =
+      timelineSelection.length > 0
+        ? timelineSelection
+        : selectedId
+          ? [selectedId]
+          : [];
+    if (ids.length === 0) return null;
+    const ends = ids
+      .map((id) => project.elements.find((e) => e.id === id)?.end ?? 0);
+    return Math.max(...ends);
+  }
+
+  function placeAfterSelection(sources, pasted) {
+    const anchorEnd = pasteAnchorEnd();
+    if (anchorEnd == null) return pasted;
+
+    const minSourceStart = Math.min(...sources.map((s) => s.start));
+    const timeShift = anchorEnd - minSourceStart;
+    const minClip = 0.2;
+
+    return pasted.map((el, i) => {
+      const dur = sources[i].end - sources[i].start;
+      let start = clamp(el.start + timeShift, 0, project.duration);
+      let end = clamp(start + dur, start + minClip, project.duration);
+      if (end - start < minClip) {
+        start = Math.max(0, end - dur);
+        end = clamp(start + dur, start + minClip, project.duration);
+      }
+      return { ...el, start, end };
+    });
+  }
+
+  function assignPastedToGroup(pasted) {
+    const gid = groupIdForNewElement();
+    if (!gid) return;
+    project = assignElementsToGroup(
+      project,
+      pasted.map((p) => p.id),
+      gid,
+    );
+    const group = (project.groups ?? []).find((g) => g.id === gid);
+    if (group?.collapsed) {
+      project = toggleGroupCollapsed(project, gid);
+    }
   }
 
   async function copySelected() {
@@ -499,9 +589,11 @@
     if (sources.length === 0) return;
     recordUndo();
     pasteCount += 1;
-    const pasted = duplicateElements(sources, maxZIndex(), pasteCount);
+    let pasted = duplicateElements(sources, maxZIndex(), pasteCount);
+    pasted = placeAfterSelection(sources, pasted);
     project.elements = [...project.elements, ...pasted];
-    selectedId = pasted[pasted.length - 1].id;
+    assignPastedToGroup(pasted);
+    setSelection(pasted.map((p) => p.id));
   }
 
   async function pasteFromClipboard() {
@@ -531,6 +623,13 @@
 
   function onKeyDown(e) {
     if (isEditableTarget(e.target)) return;
+
+    if (e.code === 'Space' || e.key === ' ') {
+      e.preventDefault();
+      togglePlay();
+      return;
+    }
+
     const mod = e.ctrlKey || e.metaKey;
     if (!mod) {
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -585,12 +684,11 @@
     if (!file) return;
     recordUndo();
     const src = await readFileAsDataUrl(file);
-    const el = defaultElement('image', project.duration);
+    const el = defaultElement('image', project.duration, currentTime);
     el.src = src;
     el.label = file.name;
     el.zIndex = project.elements.length + 1;
-    project.elements = [...project.elements, el];
-    selectedId = el.id;
+    appendNewElement(el);
     e.currentTarget.value = '';
   }
 
@@ -599,12 +697,11 @@
     if (!file) return;
     recordUndo();
     const src = await readFileAsDataUrl(file);
-    const el = defaultElement('video', project.duration);
+    const el = defaultElement('video', project.duration, currentTime);
     el.src = src;
     el.label = file.name;
     el.zIndex = project.elements.length + 1;
-    project.elements = [...project.elements, el];
-    selectedId = el.id;
+    appendNewElement(el);
     e.currentTarget.value = '';
   }
 
@@ -745,7 +842,7 @@
           }}
         />
       </label>
-      <label class="inline">
+      <label class="inline" title="Left = fit timeline to panel width; right = zoom in">
         Zoom
         <input type="range" min="40" max="160" bind:value={pxPerSec} />
       </label>
@@ -772,7 +869,42 @@
     </div>
   </header>
 
-  <div class="workspace">
+  {#snippet timelineEditor(embedded = false)}
+    <Timeline
+      elements={project.elements}
+      groups={project.groups ?? []}
+      duration={project.duration}
+      {currentTime}
+      selectedIds={timelineSelection}
+      {pxPerSec}
+      {embedded}
+      onSeek={seek}
+      onSelect={selectFromTimeline}
+      onSelectGroup={selectGroup}
+      onUpdateTiming={updateTiming}
+      onToggleGroup={handleToggleGroup}
+      onCreateGroup={createGroupFromSelection}
+      onUngroup={ungroupSelection}
+      onDissolveGroup={handleDissolveGroup}
+      onRenameGroup={handleRenameGroup}
+      onAssignToGroup={handleAssignToGroup}
+      onGestureStart={beginGesture}
+      onGestureEnd={endGesture}
+    />
+  {/snippet}
+
+  {#snippet propertiesEditor()}
+    <PropertiesPanel
+      element={selectedElement}
+      selectionCount={timelineSelection.length || (selectedId ? 1 : 0)}
+      onUpdate={updateElementFromPanel}
+      onDelete={deleteElement}
+      onCenterEach={centerSelectionEach}
+      onCenterGroup={centerSelectionAsGroup}
+    />
+  {/snippet}
+
+  <div class="workspace" class:popout-layout={previewPopoutOpen}>
     <main class="preview">
       <div class="preview-toolbar">
         {#if previewPopoutOpen}
@@ -818,42 +950,22 @@
           />
         </div>
       {:else}
-        <p class="preview-placeholder">
-          Use the pop-out window to view and edit the canvas. Click <strong>Dock preview</strong> to
-          bring it back here.
-        </p>
+        <div class="popout-editor">
+          <div class="popout-editor-timeline">
+            {@render timelineEditor(true)}
+          </div>
+          {@render propertiesEditor()}
+        </div>
       {/if}
     </main>
-    <PropertiesPanel
-      element={selectedElement}
-      selectionCount={timelineSelection.length || (selectedId ? 1 : 0)}
-      onUpdate={updateElementFromPanel}
-      onDelete={deleteElement}
-      onCenterEach={centerSelectionEach}
-      onCenterGroup={centerSelectionAsGroup}
-    />
+    {#if !previewPopoutOpen}
+      {@render propertiesEditor()}
+    {/if}
   </div>
 
-  <Timeline
-    elements={project.elements}
-    groups={project.groups ?? []}
-    duration={project.duration}
-    {currentTime}
-    selectedIds={timelineSelection}
-    {pxPerSec}
-    onSeek={seek}
-    onSelect={selectFromTimeline}
-    onSelectGroup={selectGroup}
-    onUpdateTiming={updateTiming}
-    onToggleGroup={handleToggleGroup}
-    onCreateGroup={createGroupFromSelection}
-    onUngroup={ungroupSelection}
-    onDissolveGroup={handleDissolveGroup}
-    onRenameGroup={handleRenameGroup}
-    onAssignToGroup={handleAssignToGroup}
-    onGestureStart={beginGesture}
-    onGestureEnd={endGesture}
-  />
+  {#if !previewPopoutOpen}
+    {@render timelineEditor(false)}
+  {/if}
 </div>
 
 <style>
@@ -861,6 +973,8 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .toolbar {
@@ -906,6 +1020,8 @@
     display: flex;
     flex: 1;
     min-height: 0;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .preview {
@@ -949,16 +1065,24 @@
     min-height: 0;
   }
 
-  .preview-placeholder {
+  .workspace.popout-layout .preview {
+    background: var(--panel);
+  }
+
+  .popout-editor {
     flex: 1;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0;
-    padding: 24px;
-    text-align: center;
-    color: #666;
-    font-size: 14px;
-    line-height: 1.5;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .popout-editor-timeline {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 </style>

@@ -8,6 +8,7 @@
     queryInstalledFonts,
     resolveFontFamily,
   } from '../lib/fonts';
+  import { DEFAULT_PLAYBACK_SPEED, isGifSrc } from '../lib/media';
 
   /** @type {{
     element: import('../lib/types').SceneElement | null,
@@ -27,6 +28,10 @@
   } = $props();
 
   let showGroupCenter = $derived(selectionCount > 1);
+  let showPlaybackSpeed = $derived(
+    element != null &&
+      (element.type === 'video' || (element.type === 'image' && isGifSrc(element.src))),
+  );
 
   /** @type {import('../lib/fonts').FontOption[]} */
   let installedFonts = $state([]);
@@ -215,6 +220,22 @@
       </label>
     {/if}
 
+    {#if showPlaybackSpeed}
+      <label>
+        Playback speed
+        <input
+          type="number"
+          min="0.1"
+          max="4"
+          step="0.1"
+          value={element.playbackSpeed ?? DEFAULT_PLAYBACK_SPEED}
+          oninput={(e) =>
+            onUpdate(element.id, { playbackSpeed: Number(e.currentTarget.value) })}
+        />
+        <span class="hint inline-hint">1 = normal, 0.5 = half speed, 2 = double</span>
+      </label>
+    {/if}
+
     <label>
       Start (s)
       <input
@@ -348,5 +369,10 @@
     color: #666;
     font-size: 13px;
     margin: 0;
+  }
+
+  .inline-hint {
+    font-size: 11px;
+    line-height: 1.35;
   }
 </style>

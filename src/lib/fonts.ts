@@ -1,3 +1,5 @@
+import type { Project } from './types';
+
 /** Curated fonts for text elements (label + CSS font-family value). */
 export const TEXT_FONTS = [
   { label: 'Inter', value: 'Inter, sans-serif' },
@@ -21,6 +23,22 @@ export const DEFAULT_FONT_FAMILY = 'Inter, sans-serif';
 
 export type FontOption = { label: string; value: string };
 
+/** Google Fonts that only ship a single weight (no wght axis in URL). */
+const SINGLE_WEIGHT_GOOGLE = new Set(['Pacifico']);
+
+const SYSTEM_FONT_NAMES = new Set(
+  [
+    'Arial',
+    'Georgia',
+    'Times New Roman',
+    'Courier New',
+    'Verdana',
+    'Trebuchet MS',
+    'Impact',
+    'Comic Sans MS',
+  ].map((n) => n.toLowerCase()),
+);
+
 /** Google Fonts families used by TEXT_FONTS (non-system). */
 const GOOGLE_FAMILIES = [
   'Inter',
@@ -35,12 +53,71 @@ const GOOGLE_FAMILIES = [
 const CURATED_VALUES = new Set(TEXT_FONTS.map((f) => f.value));
 const CURATED_LABELS = new Set(TEXT_FONTS.map((f) => f.label.toLowerCase()));
 
+export function primaryFontName(fontFamily: string): string {
+  return fontFamily.split(',')[0]?.replace(/^["']|["']$/g, '').trim() || fontFamily;
+}
+
+export function isSystemFontName(name: string): boolean {
+  return SYSTEM_FONT_NAMES.has(name.toLowerCase());
+}
+
+function parseFontWeight(weight?: string | number): number {
+  if (weight == null) return 400;
+  if (weight === 'normal') return 400;
+  if (weight === 'bold') return 700;
+  const n = Number(weight);
+  return Number.isFinite(n) ? n : 400;
+}
+
+function googleFontUrlParam(name: string, weights: Set<number>): string {
+  const enc = encodeURIComponent(name).replace(/%20/g, '+');
+  if (SINGLE_WEIGHT_GOOGLE.has(name)) return `family=${enc}`;
+  const list = [...weights].sort((a, b) => a - b).join(';');
+  return `family=${enc}:wght@${list}`;
+}
+
+/** Collect web fonts + weights used by text elements for Google Fonts CSS. */
+export function collectWebFontsForProject(project: Project): Map<string, Set<number>> {
+  const used = new Map<string, Set<number>>();
+
+  for (const el of project.elements) {
+    if (el.type !== 'text') continue;
+    const name = primaryFontName(resolveFontFamily(el.fontFamily));
+    if (isSystemFontName(name)) continue;
+
+    const weights = used.get(name) ?? new Set<number>();
+    weights.add(parseFontWeight(el.fontWeight));
+    used.set(name, weights);
+  }
+
+  return used;
+}
+
+export function googleFontsStylesheetUrlForProject(project: Project): string {
+  const used = collectWebFontsForProject(project);
+  if (used.size === 0) return googleFontsStylesheetUrl();
+
+  const params = [...used.entries()].map(([name, weights]) =>
+    googleFontUrlParam(name, weights),
+  );
+  return `https://fonts.googleapis.com/css2?${params.join('&')}&display=swap`;
+}
+
 export function googleFontsStylesheetUrl(): string {
   return `https://fonts.googleapis.com/css2?family=${GOOGLE_FAMILIES.join('&family=')}&display=swap`;
 }
 
+export function googleFontsLinkTagForProject(project: Project): string {
+  const url = googleFontsStylesheetUrlForProject(project);
+  return `<link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="${url}" />`;
+}
+
 export function googleFontsLinkTag(): string {
-  return `<link rel="stylesheet" href="${googleFontsStylesheetUrl()}" />`;
+  return `<link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="${googleFontsStylesheetUrl()}" />`;
 }
 
 export function resolveFontFamily(fontFamily?: string): string {
