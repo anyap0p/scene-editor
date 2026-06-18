@@ -9,22 +9,39 @@
     resolveFontFamily,
   } from '../lib/fonts';
   import { DEFAULT_PLAYBACK_SPEED, isGifSrc } from '../lib/media';
+  import {
+    defaultCrop,
+    hasCrop,
+    setCropShape,
+  } from '../lib/crop';
 
   /** @type {{
     element: import('../lib/types').SceneElement | null,
     selectionCount: number,
+    cropEditingId: string | null,
+    cropEditDraft: import('../lib/crop').ElementCrop | null,
     onUpdate: (id: string, patch: Partial<import('../lib/types').SceneElement>) => void,
     onDelete: (id: string) => void,
     onCenterEach: () => void,
     onCenterGroup: () => void,
+    onStartCropEdit: () => void,
+    onCropDraftChange: (crop: import('../lib/crop').ElementCrop | null) => void,
+    onConfirmCropEdit: () => void,
+    onCancelCropEdit: () => void,
   }} */
   let {
     element,
     selectionCount,
+    cropEditingId,
+    cropEditDraft,
     onUpdate,
     onDelete,
     onCenterEach,
     onCenterGroup,
+    onStartCropEdit,
+    onCropDraftChange,
+    onConfirmCropEdit,
+    onCancelCropEdit,
   } = $props();
 
   let showGroupCenter = $derived(selectionCount > 1);
@@ -32,6 +49,14 @@
     element != null &&
       (element.type === 'video' || (element.type === 'image' && isGifSrc(element.src))),
   );
+  let showMediaCrop = $derived(
+    element != null && (element.type === 'image' || element.type === 'video'),
+  );
+  let isCropEditing = $derived(
+    element != null && cropEditingId === element.id,
+  );
+  let draftShape = $derived(cropEditDraft?.shape ?? 'rounded');
+  let showCornerRadius = $derived(isCropEditing && draftShape === 'rounded');
 
   /** @type {import('../lib/fonts').FontOption[]} */
   let installedFonts = $state([]);
@@ -43,6 +68,12 @@
       ? fontOptionForCurrent(element.fontFamily, installedFonts)
       : null,
   );
+
+  function changeCropShape(shape) {
+    if (!element) return;
+    const base = cropEditDraft ?? defaultCrop(shape, element.width, element.height);
+    onCropDraftChange(setCropShape(base, shape, element.width, element.height));
+  }
 
   async function refreshInstalledFonts() {
     if (!isLocalFontAccessSupported()) {
@@ -70,7 +101,7 @@
 
 <aside class="props">
   <h2>Properties</h2>
-  {#if element || selectionCount > 0}
+  {#if (element || selectionCount > 0) && !isCropEditing}
     <div class="align-section">
       <span class="section-label">Align</span>
       <div class="align-buttons">
@@ -97,6 +128,48 @@
   {/if}
 
   {#if element}
+    {#if isCropEditing}
+      <div class="crop-edit">
+        <h3 class="crop-title">Edit crop</h3>
+        <p class="hint">Drag and resize within the element. Click OK to save or Cancel to discard.</p>
+
+        <label>
+          Crop shape
+          <select value={draftShape} onchange={(e) => changeCropShape(e.currentTarget.value)}>
+            <option value="rounded">Rounded corners</option>
+            <option value="circle">Circle</option>
+            <option value="heart">Heart</option>
+          </select>
+        </label>
+
+        {#if showCornerRadius && cropEditDraft}
+          <label>
+            Corner radius (px)
+            <input
+              type="number"
+              min="0"
+              max="500"
+              step="1"
+              value={cropEditDraft.cornerRadius ?? 16}
+              oninput={(e) =>
+                onCropDraftChange({
+                  ...cropEditDraft,
+                  cornerRadius: Number(e.currentTarget.value),
+                })}
+            />
+          </label>
+        {/if}
+
+        <button type="button" class="crop-reset" onclick={() => onCropDraftChange(null)}>
+          Reset to full image
+        </button>
+
+        <div class="crop-actions">
+          <button type="button" onclick={onCancelCropEdit}>Cancel</button>
+          <button type="button" class="primary" onclick={onConfirmCropEdit}>OK</button>
+        </div>
+      </div>
+    {:else}
     <label>
       Label
       <input
@@ -236,6 +309,22 @@
       </label>
     {/if}
 
+    {#if showMediaCrop}
+      <div class="crop-section">
+        {#if hasCrop(element)}
+          <p class="hint crop-status">
+            Crop: {element.crop.shape}
+            {#if element.crop.shape === 'rounded' && element.crop.cornerRadius}
+              ({element.crop.cornerRadius}px radius)
+            {/if}
+          </p>
+        {:else}
+          <p class="hint crop-status">No crop applied</p>
+        {/if}
+        <button type="button" class="crop-edit-btn" onclick={onStartCropEdit}>Edit crop</button>
+      </div>
+    {/if}
+
     <label>
       Start (s)
       <input
@@ -268,6 +357,7 @@
     <button type="button" class="danger" onclick={() => onDelete(element.id)}>
       Delete element
     </button>
+    {/if}
   {:else if selectionCount > 0}
     <p class="hint">{selectionCount} elements selected. Use align buttons above.</p>
   {:else}
@@ -374,5 +464,47 @@
   .inline-hint {
     font-size: 11px;
     line-height: 1.35;
+  }
+
+  .crop-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .crop-status {
+    font-size: 12px;
+  }
+
+  .crop-edit-btn {
+    width: 100%;
+  }
+
+  .crop-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .crop-title {
+    margin: 0;
+    font-size: 14px;
+  }
+
+  .crop-reset {
+    width: 100%;
+    font-size: 12px;
+  }
+
+  .crop-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .crop-actions button {
+    flex: 1;
   }
 </style>

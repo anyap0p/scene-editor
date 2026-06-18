@@ -1,12 +1,37 @@
 import type { Project } from './types';
 import { googleFontsLinkTagForProject } from './fonts';
 import { exportGifRuntimeSource } from './gifPlayback';
+import { exportCropRuntimeSource, HEART_MASK_URL } from './crop';
 
 export function exportProjectJson(project: Project): string {
   return JSON.stringify(project, null, 2);
 }
 
 export function exportStandaloneHtml(project: Project): string {
+  return buildStandaloneHtml(project, HEART_MASK_URL);
+}
+
+async function heartMaskDataUrlForExport(): Promise<string> {
+  try {
+    const res = await fetch(HEART_MASK_URL);
+    const blob = await res.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return HEART_MASK_URL;
+  }
+}
+
+export async function exportStandaloneHtmlAsync(project: Project): Promise<string> {
+  const heartMaskDataUrl = await heartMaskDataUrlForExport();
+  return buildStandaloneHtml(project, heartMaskDataUrl);
+}
+
+function buildStandaloneHtml(project: Project, heartMaskDataUrl: string): string {
   const data = JSON.stringify(project);
   return `<!DOCTYPE html>
 <html lang="en">
@@ -58,6 +83,20 @@ export function exportStandaloneHtml(project: Project): string {
       white-space: pre-wrap;
       line-height: 1.25;
     }
+    .scene-el .media-clip {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+    .scene-el .crop-viewport {
+      position: absolute;
+      box-sizing: border-box;
+    }
+    .scene-el .crop-media {
+      position: absolute;
+    }
     .scene-el .media {
       position: absolute;
       inset: 0;
@@ -81,6 +120,8 @@ export function exportStandaloneHtml(project: Project): string {
     import { parseGIF, decompressFrames } from 'https://cdn.jsdelivr.net/npm/gifuct-js@2.1.2/+esm';
 
     ${exportGifRuntimeSource()}
+
+    ${exportCropRuntimeSource(heartMaskDataUrl)}
 
     function resolveExportFontFamily(name) {
       return (name && String(name).trim()) || 'Inter, sans-serif';
@@ -160,32 +201,42 @@ export function exportStandaloneHtml(project: Project): string {
           node.style.transformOrigin = 'center center';
         }
       } else if (el.type === 'image') {
-        if (isGifSrc(el.src)) {
-          const img = document.createElement('img');
-          img.className = 'media';
-          img.src = el.src || '';
-          img.alt = '';
-          node.appendChild(img);
-          const canvas = document.createElement('canvas');
-          canvas.className = 'media';
-          node.appendChild(canvas);
-          loadGifPlayer(el, canvas, img);
-        } else {
-          const img = document.createElement('img');
-          img.className = 'media';
-          img.src = el.src || '';
-          img.alt = '';
-          node.appendChild(img);
-        }
+        const wrapper = document.createElement('div');
+        wrapper.className = 'media-clip';
+        node.appendChild(wrapper);
+        appendCroppedMedia(wrapper, el, function (inner) {
+          if (isGifSrc(el.src)) {
+            const img = document.createElement('img');
+            img.className = 'media';
+            img.src = el.src || '';
+            img.alt = '';
+            inner.appendChild(img);
+            const canvas = document.createElement('canvas');
+            canvas.className = 'media';
+            inner.appendChild(canvas);
+            loadGifPlayer(el, canvas, img);
+          } else {
+            const img = document.createElement('img');
+            img.className = 'media';
+            img.src = el.src || '';
+            img.alt = '';
+            inner.appendChild(img);
+          }
+        });
       } else if (el.type === 'video') {
-        const vid = document.createElement('video');
-        vid.className = 'media';
-        vid.src = el.src || '';
-        vid.muted = true;
-        vid.playsInline = true;
-        vid.loop = true;
-        node.appendChild(vid);
-        media.push({ el, vid, node });
+        const wrapper = document.createElement('div');
+        wrapper.className = 'media-clip';
+        node.appendChild(wrapper);
+        appendCroppedMedia(wrapper, el, function (inner) {
+          const vid = document.createElement('video');
+          vid.className = 'media';
+          vid.src = el.src || '';
+          vid.muted = true;
+          vid.playsInline = true;
+          vid.loop = true;
+          inner.appendChild(vid);
+          media.push({ el, vid, node });
+        });
       }
 
       scene.appendChild(node);

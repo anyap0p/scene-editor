@@ -1,20 +1,53 @@
 <script>
   import { resolveFontFamily } from '../lib/fonts';
   import { isGifSrc, scaledLocalTime } from '../lib/media';
+  import {
+    cropMediaOffsetStyle,
+    cropViewportStyle,
+  } from '../lib/crop';
   import GifCanvas from './GifCanvas.svelte';
+  import CropEditOverlay from './CropEditOverlay.svelte';
 
-  /** @type {{ elements: import('../lib/types').SceneElement[], currentTime: number, selectedId: string | null, width: number, height: number, onSelect: (id: string | null) => void, onUpdate: (id: string, patch: Partial<import('../lib/types').SceneElement>, opts?: { skipHistory?: boolean }) => void, onGestureStart?: () => void, onGestureEnd?: () => void }} */
+  /** @type {{
+    elements: import('../lib/types').SceneElement[],
+    currentTime: number,
+    selectedId: string | null,
+    width: number,
+    height: number,
+    cropEditingId: string | null,
+    cropEditDraft: import('../lib/crop').ElementCrop | null,
+    onSelect: (id: string | null) => void,
+    onUpdate: (id: string, patch: Partial<import('../lib/types').SceneElement>, opts?: { skipHistory?: boolean }) => void,
+    onCropDraftChange: (crop: import('../lib/crop').ElementCrop) => void,
+    onCropDraftCommit?: (crop: import('../lib/crop').ElementCrop) => void,
+    onConfirmCropEdit?: () => void,
+    onCancelCropEdit?: () => void,
+    onGestureStart?: () => void,
+    onGestureEnd?: () => void,
+    scale?: number,
+  }} */
   let {
     elements,
     currentTime,
     selectedId,
     width,
     height,
+    cropEditingId = null,
+    cropEditDraft = null,
+    onCropDraftChange = () => {},
+    onCropDraftCommit,
+    onConfirmCropEdit,
+    onCancelCropEdit,
     onSelect,
     onUpdate,
     onGestureStart,
     onGestureEnd,
+    scale = 1,
   } = $props();
+
+  function isElementShown(el) {
+    return visible(el) || cropEditingId === el.id;
+  }
 
   /** @type {null | {
     id: string,
@@ -44,6 +77,7 @@
   }
 
   function onCanvasDown(e) {
+    if (cropEditingId) return;
     if (e.target === e.currentTarget) onSelect(null);
   }
 
@@ -92,7 +126,21 @@
     return s;
   }
 
+  function activeCrop(el) {
+    if (isCropEditing(el)) return null;
+    return el.crop ?? null;
+  }
+
+  function isCropEditing(el) {
+    return cropEditingId === el.id;
+  }
+
   function startDrag(e, el, mode) {
+    if (cropEditingId) {
+      e.stopPropagation();
+      return;
+    }
+    if (isCropEditing(el)) return;
     e.preventDefault();
     e.stopPropagation();
     onGestureStart?.();
@@ -207,6 +255,7 @@
 <div
   class="canvas"
   class:is-dragging={!!drag}
+  class:crop-editing-mode={!!cropEditingId}
   style="width: {width}px; height: {height}px;"
   onclick={onCanvasDown}
   onkeydown={() => {}}
@@ -214,45 +263,125 @@
   aria-label="Scene canvas"
 >
   {#each sorted() as el (el.id)}
+    {@const geo = elementGeometry(el)}
+    {@const crop = activeCrop(el)}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="el"
-      class:visible={visible(el)}
+      class:visible={isElementShown(el)}
       class:selected={selectedId === el.id}
       class:dragging={drag?.id === el.id}
       class:is-text={el.type === 'text'}
+      class:is-crop-editing={isCropEditing(el)}
       style={elementStyle(el)}
       onmousedown={(e) => startDrag(e, el, 'move')}
     >
       {#if el.type === 'text'}
         <span class="text-inner">{el.text || ''}</span>
-      {:else if el.type === 'image' && el.src && isGifSrc(el.src)}
-        <GifCanvas
-          src={el.src}
-          {currentTime}
-          start={el.start}
-          playbackSpeed={el.playbackSpeed}
-        />
-      {:else if el.type === 'image' && el.src}
-        <img src={el.src} alt="" draggable="false" />
-      {:else if el.type === 'video' && el.src}
-        <video
-          src={el.src}
-          muted
-          playsinline
-          loop
-          draggable="false"
-          use:syncVideo={{
-            currentTime,
-            start: el.start,
-            end: el.end,
-            speed: el.playbackSpeed,
-          }}
-        ></video>
+      {:else if el.type === 'image' || el.type === 'video'}
+        <div class="media-stage">
+          {#if isCropEditing(el) && cropEditDraft}
+            <CropEditOverlay
+              crop={cropEditDraft}
+              width={geo.width}
+              height={geo.height}
+              {scale}
+              maskId="crop-dim-{el.id}"
+              onCommit={onCropDraftCommit ?? onCropDraftChange}
+              onConfirm={onConfirmCropEdit}
+              onCancel={onCancelCropEdit}
+              onGestureStart={onGestureStart}
+              onGestureEnd={onGestureEnd}
+            >
+              {#snippet children()}
+                {#if el.type === 'image' && el.src && isGifSrc(el.src)}
+                  <GifCanvas
+                    src={el.src}
+                    {currentTime}
+                    start={el.start}
+                    playbackSpeed={el.playbackSpeed}
+                  />
+                {:else if el.type === 'image' && el.src}
+                  <img src={el.src} alt="" draggable="false" />
+                {:else if el.type === 'video' && el.src}
+                  <video
+                    src={el.src}
+                    muted
+                    playsinline
+                    loop
+                    draggable="false"
+                    use:syncVideo={{
+                      currentTime,
+                      start: el.start,
+                      end: el.end,
+                      speed: el.playbackSpeed,
+                    }}
+                  ></video>
+                {:else}
+                  <span class="placeholder">{el.type}</span>
+                {/if}
+              {/snippet}
+            </CropEditOverlay>
+          {:else if crop}
+            <div class="crop-viewport" style={cropViewportStyle(crop, geo.width, geo.height)}>
+              <div class="crop-media" style={cropMediaOffsetStyle(crop, geo.width, geo.height)}>
+                {#if el.type === 'image' && el.src && isGifSrc(el.src)}
+                  <GifCanvas
+                    src={el.src}
+                    {currentTime}
+                    start={el.start}
+                    playbackSpeed={el.playbackSpeed}
+                  />
+                {:else if el.type === 'image' && el.src}
+                  <img src={el.src} alt="" draggable="false" />
+                {:else if el.type === 'video' && el.src}
+                  <video
+                    src={el.src}
+                    muted
+                    playsinline
+                    loop
+                    draggable="false"
+                    use:syncVideo={{
+                      currentTime,
+                      start: el.start,
+                      end: el.end,
+                      speed: el.playbackSpeed,
+                    }}
+                  ></video>
+                {/if}
+              </div>
+            </div>
+          {:else if el.type === 'image' && el.src && isGifSrc(el.src)}
+            <GifCanvas
+              src={el.src}
+              {currentTime}
+              start={el.start}
+              playbackSpeed={el.playbackSpeed}
+            />
+          {:else if el.type === 'image' && el.src}
+            <img src={el.src} alt="" draggable="false" />
+          {:else if el.type === 'video' && el.src}
+            <video
+              src={el.src}
+              muted
+              playsinline
+              loop
+              draggable="false"
+              use:syncVideo={{
+                currentTime,
+                start: el.start,
+                end: el.end,
+                speed: el.playbackSpeed,
+              }}
+            ></video>
+          {:else}
+            <span class="placeholder">{el.type}</span>
+          {/if}
+        </div>
       {:else}
         <span class="placeholder">{el.type}</span>
       {/if}
-      {#if selectedId === el.id}
+      {#if selectedId === el.id && !isCropEditing(el)}
         {#if el.type === 'text'}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
@@ -280,6 +409,14 @@
     overflow: hidden;
     flex-shrink: 0;
     user-select: none;
+  }
+
+  .canvas.crop-editing-mode {
+    cursor: default;
+  }
+
+  .canvas.crop-editing-mode .el:not(.is-crop-editing) {
+    pointer-events: none;
   }
 
   .canvas.is-dragging {
@@ -315,6 +452,25 @@
 
   .el.is-text {
     overflow: visible;
+  }
+
+  .el.is-crop-editing {
+    cursor: default;
+  }
+
+  .media-stage {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+
+  .crop-viewport {
+    position: absolute;
+    box-sizing: border-box;
+  }
+
+  .crop-media {
+    position: absolute;
   }
 
   .text-inner {

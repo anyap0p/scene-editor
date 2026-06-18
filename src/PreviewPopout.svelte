@@ -14,6 +14,10 @@
   let duration = $state(10);
   let isPlaying = $state(false);
   let connected = $state(false);
+  let cropEditingId = $state(null);
+  /** @type {import('./lib/crop').ElementCrop | null} */
+  let cropEditDraft = $state(null);
+  let stageScale = $state(1);
 
   /** @type {BroadcastChannel | null} */
   let channel = null;
@@ -30,6 +34,8 @@
     canvasHeight = msg.canvasHeight;
     duration = msg.duration;
     isPlaying = msg.isPlaying;
+    cropEditingId = msg.cropEditingId ?? null;
+    cropEditDraft = msg.cropEditDraft ?? null;
     connected = true;
   }
 
@@ -63,6 +69,20 @@
     post({ type: 'update', id, patch });
   }
 
+  /** @param {import('./lib/crop').ElementCrop} crop */
+  function onCropDraftCommit(crop) {
+    cropEditDraft = crop;
+    post({ type: 'cropDraft', crop });
+  }
+
+  function onConfirmCropEdit() {
+    post({ type: 'cropConfirm' });
+  }
+
+  function onCancelCropEdit() {
+    post({ type: 'cropCancel' });
+  }
+
   function togglePlay() {
     post({ type: 'play', playing: !isPlaying });
   }
@@ -89,15 +109,21 @@
     {/if}
   </header>
   <main class="popout-stage">
-    <ScaledStage width={canvasWidth} height={canvasHeight}>
+    <ScaledStage width={canvasWidth} height={canvasHeight} bind:stageScale>
       <Canvas
         {elements}
         {currentTime}
         {selectedId}
         width={canvasWidth}
         height={canvasHeight}
+        {cropEditingId}
+        {cropEditDraft}
+        scale={stageScale}
         onSelect={onSelect}
         onUpdate={onUpdate}
+        onCropDraftCommit={onCropDraftCommit}
+        onConfirmCropEdit={onConfirmCropEdit}
+        onCancelCropEdit={onCancelCropEdit}
       />
     </ScaledStage>
   </main>

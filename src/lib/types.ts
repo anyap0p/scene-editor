@@ -1,5 +1,8 @@
 export type ElementType = 'text' | 'image' | 'video';
 
+export type { CropShape, ElementCrop } from './crop';
+import type { ElementCrop } from './crop';
+
 export interface SceneElement {
   id: string;
   type: ElementType;
@@ -22,6 +25,8 @@ export interface SceneElement {
   rotation?: number;
   /** Playback speed multiplier for GIF and video (1 = normal, 0.5 = half speed). */
   playbackSpeed?: number;
+  /** Non-destructive crop for image/video. Undefined = full media visible. */
+  crop?: ElementCrop;
 }
 
 export interface TimelineGroup {

@@ -5,7 +5,7 @@
   import PropertiesPanel from './components/PropertiesPanel.svelte';
   import ProjectPicker from './components/ProjectPicker.svelte';
   import { defaultElement } from './lib/types';
-  import { exportProjectJson, exportStandaloneHtml, downloadFile } from './lib/export';
+  import { exportProjectJson, exportStandaloneHtmlAsync, downloadFile } from './lib/export';
   import { clamp } from './lib/time';
   import {
     elementToPlain,
@@ -37,6 +37,10 @@
   import { PREVIEW_CHANNEL, openPreviewPopout } from './lib/previewSync';
   import { centerElementsEach, centerElementsAsGroup } from './lib/align';
   import { createUndoStack } from './lib/history';
+  import {
+    cloneCrop,
+    defaultCrop,
+  } from './lib/crop';
 
   let project = $state(defaultProject());
   let activeProjectId = $state(null);
@@ -79,6 +83,9 @@
   let canUndo = $state(false);
   let canRedo = $state(false);
   let gestureDepth = 0;
+  let cropEditingId = $state(null);
+  /** @type {import('./lib/crop').ElementCrop | null} */
+  let cropEditDraft = $state(null);
 
   function refreshUndoState() {
     canUndo = undoStack.canUndo();
@@ -136,6 +143,7 @@
   }
 
   function selectFromTimeline(id, additive = false) {
+    if (cropEditingId) return;
     if (!id) {
       focusedGroupId = null;
       setSelection([]);
@@ -153,11 +161,13 @@
   }
 
   function selectFromCanvas(id) {
+    if (cropEditingId) return;
     focusedGroupId = null;
     setSelection(id ? [id] : []);
   }
 
   function selectGroup(groupId) {
+    if (cropEditingId) return;
     focusedGroupId = groupId;
     const ids = project.elements.filter((e) => e.groupId === groupId).map((e) => e.id);
     setSelection(ids);
@@ -247,6 +257,8 @@
       isPlaying,
       playbackStartedAt: playStart,
       playFrom,
+      cropEditingId,
+      cropEditDraft: cropEditDraft ? cloneCrop(cropEditDraft) : null,
     });
   }
 
@@ -267,11 +279,20 @@
         postPreviewSync();
         break;
       case 'select':
-        selectFromCanvas(msg.id);
+        if (!cropEditingId) selectFromCanvas(msg.id);
         postPreviewSync();
         break;
       case 'update':
         updateElement(msg.id, msg.patch, { skipHistory: true });
+        break;
+      case 'cropDraft':
+        commitCropEditDraft(msg.crop);
+        break;
+      case 'cropConfirm':
+        confirmCropEdit();
+        break;
+      case 'cropCancel':
+        cancelCropEdit();
         break;
       case 'seek':
         seek(msg.time);
@@ -399,6 +420,50 @@
     updateElement(id, patch, { skipHistory: true });
   }
 
+  function startCropEdit() {
+    const el = selectedElement;
+    if (!el || (el.type !== 'image' && el.type !== 'video')) return;
+    cropEditingId = el.id;
+    cropEditDraft = el.crop
+      ? cloneCrop(el.crop)
+      : defaultCrop('rounded', el.width, el.height);
+    postPreviewSync();
+  }
+
+  /** @param {import('./lib/crop').ElementCrop | null} crop */
+  function setCropEditDraft(crop) {
+    cropEditDraft = crop;
+    postPreviewSync();
+  }
+
+  /** @param {import('./lib/crop').ElementCrop} crop */
+  function commitCropEditDraft(crop) {
+    cropEditDraft = crop;
+  }
+
+  function confirmCropEdit() {
+    if (!cropEditingId) return;
+    recordUndo();
+    const id = cropEditingId;
+    project.elements = project.elements.map((el) => {
+      if (el.id !== id) return el;
+      if (!cropEditDraft) {
+        const { crop, ...rest } = el;
+        return rest;
+      }
+      return { ...el, crop: cloneCrop(cropEditDraft) };
+    });
+    cropEditingId = null;
+    cropEditDraft = null;
+    postPreviewSync();
+  }
+
+  function cancelCropEdit() {
+    cropEditingId = null;
+    cropEditDraft = null;
+    postPreviewSync();
+  }
+
   function updateTiming(id, start, end, opts = {}) {
     const s = clamp(start, 0, project.duration);
     const e = clamp(end, s + 0.1, project.duration);
@@ -413,6 +478,7 @@
   }
 
   function deleteElement(id) {
+    if (cropEditingId === id) cancelCropEdit();
     recordUndo();
     project.elements = project.elements.filter((e) => e.id !== id);
     setSelection(timelineSelection.filter((sid) => sid !== id));
@@ -745,11 +811,13 @@
   }
 
   function exportHtml() {
-    downloadFile(
-      `${project.name.replace(/\s+/g, '-')}.html`,
-      exportStandaloneHtml(project),
-      'text/html',
-    );
+    void exportStandaloneHtmlAsync(project).then((html) => {
+      downloadFile(
+        `${project.name.replace(/\s+/g, '-')}.html`,
+        html,
+        'text/html',
+      );
+    });
   }
 
   function saveProject() {
@@ -897,10 +965,16 @@
     <PropertiesPanel
       element={selectedElement}
       selectionCount={timelineSelection.length || (selectedId ? 1 : 0)}
+      {cropEditingId}
+      {cropEditDraft}
       onUpdate={updateElementFromPanel}
       onDelete={deleteElement}
       onCenterEach={centerSelectionEach}
       onCenterGroup={centerSelectionAsGroup}
+      onStartCropEdit={startCropEdit}
+      onCropDraftChange={setCropEditDraft}
+      onConfirmCropEdit={confirmCropEdit}
+      onCancelCropEdit={cancelCropEdit}
     />
   {/snippet}
 
@@ -943,8 +1017,14 @@
             {selectedId}
             width={project.canvasWidth}
             height={project.canvasHeight}
+            {cropEditingId}
+            {cropEditDraft}
             onSelect={selectFromCanvas}
             onUpdate={updateElement}
+            onCropDraftChange={setCropEditDraft}
+            onCropDraftCommit={commitCropEditDraft}
+            onConfirmCropEdit={confirmCropEdit}
+            onCancelCropEdit={cancelCropEdit}
             onGestureStart={beginGesture}
             onGestureEnd={endGesture}
           />

@@ -2,9 +2,10 @@
   /** @type {{
     width: number,
     height: number,
+    stageScale?: number,
     children: import('svelte').Snippet,
   }} */
-  let { width, height, children } = $props();
+  let { width, height, stageScale = $bindable(1), children } = $props();
 
   let containerEl = $state(null);
   let containerW = $state(0);
@@ -20,6 +21,10 @@
 
   let scaledW = $derived(width * scale);
   let scaledH = $derived(height * scale);
+
+  $effect(() => {
+    stageScale = scale;
+  });
 
   $effect(() => {
     const el = containerEl;

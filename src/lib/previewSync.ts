@@ -1,4 +1,5 @@
 import type { SceneElement } from './types';
+import type { ElementCrop } from './crop';
 
 export const PREVIEW_CHANNEL = 'scene-editor-preview';
 
@@ -15,10 +16,15 @@ export type PreviewSyncMessage =
       isPlaying: boolean;
       playbackStartedAt: number;
       playFrom: number;
+      cropEditingId: string | null;
+      cropEditDraft: ElementCrop | null;
     }
   | { type: 'tick'; currentTime: number; playbackStartedAt: number; playFrom: number }
   | { type: 'select'; id: string | null }
   | { type: 'update'; id: string; patch: Partial<SceneElement> }
+  | { type: 'cropDraft'; crop: ElementCrop | null }
+  | { type: 'cropConfirm' }
+  | { type: 'cropCancel' }
   | { type: 'seek'; time: number }
   | { type: 'play'; playing: boolean };
 
